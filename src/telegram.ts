@@ -3,7 +3,7 @@ export type TelegramDestination = { chatId: string; messageThreadId?: number };
 export async function sendTelegramMessage(token: string, destination: TelegramDestination, text: string): Promise<void> {
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: destination.chatId, message_thread_id: destination.messageThreadId, text, disable_web_page_preview: true })
+    body: JSON.stringify({ chat_id: destination.chatId, message_thread_id: destination.messageThreadId, text, parse_mode: "HTML", disable_web_page_preview: true })
   });
   if (!response.ok) throw new Error(`Telegram send failed: ${response.status} ${await response.text()}`);
 }
