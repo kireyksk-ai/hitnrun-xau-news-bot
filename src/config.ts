@@ -9,6 +9,8 @@ const schema = z.object({
   NEWSAPI_KEY: z.string().optional(),
   GNEWS_API_KEY: z.string().optional(),
   GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
+  OFFICIAL_MACRO_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+  OFFICIAL_MACRO_RSS_POLL_SECONDS: z.coerce.number().int().min(120).default(300),
   MAX_AI_ARTICLES_PER_DAY: z.coerce.number().int().min(1).max(200).default(40),
   OPENAI_MODEL: z.string().default("gpt-5-mini"),
   OPENAI_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
