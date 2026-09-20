@@ -1,24 +1,25 @@
 import pino from "pino";
 import { config } from "./config.js";
 import { Editor } from "./editor.js";
+import { NewsApiProvider, NewsApiRateLimitError } from "./providers/newsapi.js";
 import { GoogleNewsRssProvider } from "./providers/google-news-rss.js";
 import { GNewsDailyLimitError, GNewsProvider } from "./providers/gnews.js";
+import { OfficialMacroRssProvider } from "./providers/official-macro-rss.js";
 import { TruthSocialTrumpProvider } from "./providers/truth-social.js";
 import { Store } from "./store.js";
 import { discoverTelegramDestination, sendTelegramMessage } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 
 const log = pino({ level: config.LOG_LEVEL });
-// When GNews is configured, it is the only commercial news source queried.
-// This prevents the old NewsAPI key from consuming any further quota.
 const providers: NewsProvider[] = [
-  ...(config.GNEWS_API_KEY
-    ? [new GNewsProvider(config.GNEWS_API_KEY, config.GNEWS_POLL_INTERVAL_SECONDS)]
-    : (config.GOOGLE_NEWS_RSS_ENABLED ? [new GoogleNewsRssProvider()] : [])),
-  ...(config.TRUTH_SOCIAL_ENABLED ? [new TruthSocialTrumpProvider(config.TRUTH_SOCIAL_POLL_SECONDS)] : [])
+  ...(config.GNEWS_API_KEY ? [new GNewsProvider(config.GNEWS_API_KEY, config.GNEWS_POLL_INTERVAL_SECONDS)] : [
+    ...(config.GOOGLE_NEWS_RSS_ENABLED ? [new GoogleNewsRssProvider()] : []),
+    ...(config.NEWSAPI_KEY ? [new NewsApiProvider(config.NEWSAPI_KEY, Math.max(config.POLL_INTERVAL_SECONDS, 20 * 60))] : [])
+  ]),
+  ...(config.OFFICIAL_MACRO_RSS_ENABLED ? [new OfficialMacroRssProvider(config.OFFICIAL_MACRO_RSS_POLL_SECONDS)] : []),
+  ...(config.TRUTH_SOCIAL_ENABLED ? [new TruthSocialTrumpProvider(Math.max(120, config.TRUTH_SOCIAL_POLL_SECONDS))] : [])
 ];
-if (!providers.length) throw new Error("No news provider configured. Set GNEWS_API_KEY or enable the RSS backup.");
-
+if (!providers.length) throw new Error("No news provider configured. Set NEWSAPI_KEY or add an adapter in src/providers.");
 const store = new Store(config.SQLITE_PATH);
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
 const discoveredDestination = await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
@@ -56,7 +57,6 @@ async function tick(): Promise<void> {
     const dueAt = (lastPolledAt.get(provider.name) ?? 0) + (provider.pollIntervalSeconds ?? config.POLL_INTERVAL_SECONDS) * 1000;
     if (now < dueAt) continue;
     lastPolledAt.set(provider.name, now);
-
     try {
       const articles = await provider.fetchLatest(since);
       for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
@@ -76,12 +76,13 @@ async function tick(): Promise<void> {
             store.remember(article, false);
             log.debug({ title: article.title, reason: decision.reason }, "Rejected article");
           }
-        } catch (error) {
-          log.error({ err: error, title: article.title }, "Article processing failed; will retry");
-        }
+        } catch (error) { log.error({ err: error, title: article.title }, "Article processing failed; will retry"); }
       }
     } catch (error) {
-      if (error instanceof GNewsDailyLimitError) {
+      if (error instanceof NewsApiRateLimitError) {
+        pausedUntil.set(provider.name, Date.now() + error.retryAfterSeconds * 1000);
+        log.warn({ provider: provider.name, retryAfterHours: error.retryAfterSeconds / 3600 }, "NewsAPI quota reached; polling paused until quota resets");
+      } else if (error instanceof GNewsDailyLimitError) {
         pausedUntil.set(provider.name, nextUtcMidnight());
         log.warn({ provider: provider.name }, "GNews daily safety limit reached; polling paused until UTC midnight");
       } else {
