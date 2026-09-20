@@ -6,6 +6,7 @@ const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_CHAT_ID: z.string().optional().transform((value) => value?.trim() || undefined),
   TELEGRAM_MESSAGE_THREAD_ID: z.coerce.number().int().positive().optional(),
+  TELEGRAM_CHAT_ID_REGULAR: z.string().optional().transform((value) => value?.trim() || undefined),
   NEWSAPI_KEY: z.string().optional(),
   GNEWS_API_KEY: z.string().optional(),
   GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
