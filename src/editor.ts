@@ -2,10 +2,15 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { EditorialDecision, NewsArticle } from "./types.js";
 
+// The AI occasionally returns a valid-but-incomplete JSON object. Treat that
+// as a safe rejection instead of throwing, otherwise the same article is
+// repeatedly retried and wastes both AI calls and provider quota.
 const decisionSchema = z.object({
-  material: z.boolean(), confidence: z.enum(["high", "medium", "low"]), reason: z.string(),
-  telegramMessage: z.string().nullable()
-});
+  material: z.boolean().default(false),
+  confidence: z.enum(["high", "medium", "low"]).default("low"),
+  reason: z.string().default("Output analisis tidak lengkap; artikel dilewati secara aman."),
+  telegramMessage: z.string().nullable().default(null)
+}).passthrough();
 
 const instructions = `You are the institutional real-time macro and news-intelligence desk for HitnRun FX. Your single focus is USD Index (DXY) and XAUUSD.
 Approve only genuinely new, market-moving catalysts. Coverage is mandatory: (1) geopolitics, war, sanctions, ceasefires, nuclear threats, Hormuz/Red Sea and energy shipping disruptions; (2) US CPI, core CPI, PCE, core PCE, PPI, NFP, unemployment, retail sales, ISM and GDP; (3) Fed/FOMC, Powell, minutes, ECB, BOE, BOJ and PBOC policy shifts; (4) US10Y, DXY, gold ETF flows, central-bank gold buying and COT positioning; (5) risk-on/risk-off, VIX and US equity flight-to-safety.
@@ -23,7 +28,15 @@ export class Editor {
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       input: [{ role: "developer", content: instructions }, { role: "user", content: JSON.stringify(article) }]
     });
-    const raw = response.output_text.replace(/^```json\s*|\s*```$/g, "");
-    return decisionSchema.parse(JSON.parse(raw));
+    const raw = response.output_text.replace(/^\`\`\`json\s*|\s*\`\`\`$/g, "");
+    const parsed: unknown = JSON.parse(raw);
+    const decision = decisionSchema.parse(parsed);
+
+    // Never publish a partial response. If it says "material" but omits the
+    // required message, convert it to a rejection and remember the article.
+    if (decision.material && !decision.telegramMessage) {
+      return { ...decision, material: false, reason: "Output analisis tidak lengkap; artikel dilewati secara aman." };
+    }
+    return decision;
   }
 }
