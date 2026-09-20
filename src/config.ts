@@ -9,6 +9,8 @@ const schema = z.object({
     TELEGRAM_CHAT_ID_REGULAR: z.string().optional().transform((value) => value?.trim() || undefined),
     NEWSAPI_KEY: z.string().optional(),
     GNEWS_API_KEY: z.string().optional(),
+    MARKETAUX_API_KEY: z.string().optional(),
+    MARKETAUX_POLL_SECONDS: z.coerce.number().int().min(300).default(1200),
     GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
     OFFICIAL_MACRO_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     OFFICIAL_MACRO_RSS_POLL_SECONDS: z.coerce.number().int().min(120).default(300),
