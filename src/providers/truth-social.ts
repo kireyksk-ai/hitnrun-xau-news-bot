@@ -1,34 +1,61 @@
+import * as cheerio from "cheerio";
 import type { NewsArticle, NewsProvider } from "../types.js";
 
-type TruthStatus = { id?: string; content?: string; url?: string; created_at?: string; reblog?: unknown };
-const accountId = "107780257626128497";
+// The official truthsocial.com API blocks server-side/datacenter requests
+// with 403 (Cloudflare-style bot protection), regardless of headers sent.
+// This provider instead reads the public trumpstruth.org mirror, which
+// renders Trump's Truth Social posts as plain server-side HTML with no
+// such protection. Because it's an unofficial mirror site, its markup can
+// change without notice -- if this provider starts silently returning zero
+// posts, that's the first place to check.
+const MIRROR_URL = "https://www.trumpstruth.org/";
 
-function toText(html: string): string {
-  return html.replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/g, " ")
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
-}
-
-/** Public Mastodon-compatible timeline for @realDonaldTrump; no credential is stored. */
 export class TruthSocialTrumpProvider implements NewsProvider {
   readonly name = "truth-social-trump";
   constructor(readonly pollIntervalSeconds: number) {}
 
   async fetchLatest(since: Date): Promise<NewsArticle[]> {
-    const endpoint = new URL(`https://truthsocial.com/api/v1/accounts/${accountId}/statuses`);
-    endpoint.searchParams.set("limit", "40");
-    endpoint.searchParams.set("exclude_replies", "true");
-    const response = await fetch(endpoint, { headers: { Accept: "application/json", "User-Agent": "HitnRun-XAU-News/1.0" } });
-    if (!response.ok) throw new Error(`Truth Social feed failed: ${response.status}`);
-    const statuses = await response.json() as TruthStatus[];
-    return statuses.flatMap((status) => {
-      if (!status.id || !status.content || !status.created_at || status.reblog) return [];
-      const publishedAt = new Date(status.created_at);
-      if (publishedAt < since) return [];
-      const text = toText(status.content);
-      if (!text) return [];
-      return [{ provider: this.name, providerId: status.id, title: "Donald Trump — Truth Social", summary: text,
-        url: status.url ?? `https://truthsocial.com/@realDonaldTrump/${status.id}`, publishedAt, sourceName: "Truth Social @realDonaldTrump" }];
+    const response = await fetch(MIRROR_URL, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        Accept: "text/html"
+      }
     });
+    if (!response.ok) throw new Error(`Truth Social mirror feed failed: ${response.status}`);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+
+    const articles: NewsArticle[] = [];
+    $(".status").each((_, el) => {
+      const status = $(el);
+
+      const contentEl = status.find(".status__content").first();
+      if (!contentEl.length) return; // media-only post (photo/video repost), no text to assess
+      const text = contentEl.text().replace(/\s+/g, " ").trim();
+      if (!text) return;
+
+      const datetimeAttr = status.find(".status-info__meta time[datetime]").first().attr("datetime");
+      if (!datetimeAttr) return;
+      const publishedAt = new Date(datetimeAttr);
+      if (Number.isNaN(publishedAt.getTime()) || publishedAt < since) return;
+
+      const externalUrl = status.find(".status__external-link").first().attr("href");
+      const mirrorUrl = status.attr("data-status-url");
+      const url = externalUrl || mirrorUrl || MIRROR_URL;
+      const idMatch = url.match(/(\d+)\s*$/);
+      const providerId = idMatch ? idMatch[1] : url;
+
+      articles.push({
+        provider: this.name,
+        providerId,
+        title: "Donald Trump — Truth Social",
+        summary: text,
+        url,
+        publishedAt,
+        sourceName: "Truth Social @realDonaldTrump (via trumpstruth.org mirror)"
+      });
+    });
+
+    return articles;
   }
 }
