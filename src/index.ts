@@ -50,7 +50,10 @@ async function tick(): Promise<void> {
           const decision = await editor.assess(article);
           if (decision.material && decision.telegramMessage) { await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, telegramDestination, decision.telegramMessage); store.remember(article, true); }
           else store.remember(article, false);
-        } catch (error) { log.error({ err: error, title: article.title }, "Article processing failed; will retry"); }
+        } catch (error) {
+          store.remember(article, false);
+          log.error({ err: error, title: article.title }, "Article processing failed; article skipped safely");
+        }
       }
     } catch (error) {
       if (error instanceof GNewsDailyLimitError) { pausedUntil.set(provider.name, nextUtcMidnight()); log.warn({ provider: provider.name }, "GNews daily safety limit reached; polling paused until UTC midnight"); }
