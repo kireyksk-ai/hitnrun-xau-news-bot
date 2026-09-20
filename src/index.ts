@@ -1,6 +1,7 @@
 import pino from "pino";
 import { config } from "./config.js";
 import { Editor } from "./editor.js";
+import { marketSnapshot } from "./market-snapshot.js";
 import { GoogleNewsRssProvider } from "./providers/google-news-rss.js";
 import { GNewsDailyLimitError, GNewsProvider } from "./providers/gnews.js";
 import { OfficialMacroRssProvider } from "./providers/official-macro-rss.js";
@@ -54,7 +55,9 @@ async function tick(): Promise<void> {
         if (store.has(article)) continue;
         if (!canUseAi()) { store.remember(article, false); continue; }
         try {
-          const decision = await editor.assess(article);
+          const snapshot = await marketSnapshot();
+          const enrichedArticle = snapshot ? { ...article, summary: `${article.summary}\n\nSnapshot pasar saat headline diterima: ${snapshot}` } : article;
+          const decision = await editor.assess(enrichedArticle);
           if (decision.material && decision.telegramMessage) {
             for (const destination of telegramDestinations) {
               try {
