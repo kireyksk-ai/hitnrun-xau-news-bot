@@ -7,6 +7,7 @@ import { OfficialMacroRssProvider } from "./providers/official-macro-rss.js";
 import { TruthSocialTrumpProvider } from "./providers/truth-social.js";
 import { Store } from "./store.js";
 import { discoverTelegramDestination, sendTelegramMessage } from "./telegram.js";
+import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 
 const log = pino({ level: config.LOG_LEVEL });
@@ -20,6 +21,12 @@ const store = new Store(config.SQLITE_PATH);
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
 const discoveredDestination = await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
 const telegramDestination = { chatId: config.TELEGRAM_CHAT_ID ?? discoveredDestination.chatId, messageThreadId: config.TELEGRAM_MESSAGE_THREAD_ID ?? discoveredDestination.messageThreadId };
+// Optional second destination (e.g. the public "HITnRUN-FX (REGULAR)" group) that gets
+// every message the primary destination gets, in addition to it -- not instead of it.
+const telegramDestinations: TelegramDestination[] = [
+  telegramDestination,
+  ...(config.TELEGRAM_CHAT_ID_REGULAR ? [{ chatId: config.TELEGRAM_CHAT_ID_REGULAR }] : [])
+];
 const lastPolledAt = new Map<string, number>();
 const pausedUntil = new Map<string, number>();
 let aiArticleDay = "";
@@ -48,7 +55,16 @@ async function tick(): Promise<void> {
         if (!canUseAi()) { store.remember(article, false); continue; }
         try {
           const decision = await editor.assess(article);
-          if (decision.material && decision.telegramMessage) { await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, telegramDestination, decision.telegramMessage); store.remember(article, true); }
+          if (decision.material && decision.telegramMessage) {
+            for (const destination of telegramDestinations) {
+              try {
+                await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, destination, decision.telegramMessage);
+              } catch (sendError) {
+                log.error({ err: sendError, chatId: destination.chatId, title: article.title }, "Telegram send failed for one destination; other destinations unaffected");
+              }
+            }
+            store.remember(article, true);
+          }
           else store.remember(article, false);
         } catch (error) {
           store.remember(article, false);
@@ -65,4 +81,4 @@ async function tick(): Promise<void> {
 
 await tick();
 setInterval(() => void tick(), 5_000);
-log.info({ providers: providers.map((p) => p.name) }, "HitnRun XAU news bot started");
+log.info({ providers: providers.map((p) => p.name), telegramDestinations: telegramDestinations.map((d) => d.chatId) }, "HitnRun XAU news bot started");
