@@ -10,6 +10,7 @@ import { TruthSocialTrumpProvider } from "./providers/truth-social.js";
 import { TreasuryPressProvider } from "./providers/treasury-press.js";
 import { TwitterWireProvider } from "./providers/twitter-wire.js";
 import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
+import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { Store } from "./store.js";
 import { discoverTelegramDestination, sendTelegramMessage } from "./telegram.js";
 import type { TelegramDestination } from "./telegram.js";
@@ -23,7 +24,8 @@ const providers: NewsProvider[] = [
   ...(config.TRUTH_SOCIAL_ENABLED ? [new TruthSocialTrumpProvider(Math.max(120, config.TRUTH_SOCIAL_POLL_SECONDS))] : []),
   ...(config.TREASURY_PRESS_ENABLED ? [new TreasuryPressProvider(config.TREASURY_PRESS_POLL_SECONDS)] : []),
   ...(config.TWITTER_WIRE_ENABLED && config.X_API_BEARER_TOKEN ? [new TwitterWireProvider(config.TWITTER_WIRE_POLL_SECONDS, config.TWITTER_WIRE_MAX_MONTHLY_USD)] : []),
-    ...(config.BENZINGA_API_KEY ? [new BenzingaWireProvider(config.BENZINGA_API_KEY, config.BENZINGA_POLL_SECONDS)] : [])
+    ...(config.BENZINGA_API_KEY ? [new BenzingaWireProvider(config.BENZINGA_API_KEY, config.BENZINGA_POLL_SECONDS)] : []),
+    ...(config.FXMACRODATA_API_KEY ? [new FxMacroDataProvider(config.FXMACRODATA_API_KEY, config.FXMACRODATA_POLL_SECONDS)] : [])
 ];
 if (!providers.length) throw new Error("No news provider configured.");
 const store = new Store(config.SQLITE_PATH);
