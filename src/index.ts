@@ -1,6 +1,7 @@
 import pino from "pino";
 import { config } from "./config.js";
 import { Editor } from "./editor.js";
+import { assessEvent, highPriorityFallback } from "./event-intelligence.js";
 import { marketSnapshot } from "./market-snapshot.js";
 import { GoogleNewsRssProvider } from "./providers/google-news-rss.js";
 import { GNewsDailyLimitError, GNewsProvider } from "./providers/gnews.js";
@@ -65,30 +66,37 @@ async function tick(): Promise<void> {
           try {
                   const articles = await provider.fetchLatest(since);
                   for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
-                            if (store.has(article)) continue;
-                            if (!canUseAi()) { store.remember(article, false); continue; }
+                            const event = assessEvent(article);
+                            if (store.has(article) || store.hasEvent(event.key)) continue;
+                            const publish = async (message: string) => {
+                              for (const destination of telegramDestinations) {
+                                try { await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, destination, message); }
+                                catch (sendError) { log.error({ err: sendError, chatId: destination.chatId, title: article.title }, "Telegram send failed for one destination; other destinations unaffected"); }
+                              }
+                              store.remember(article, true);
+                              store.rememberEvent(event.key, true);
+                              log.info({ provider: article.provider, title: article.title, score: event.score, highPriority: event.highPriority }, "Event sent to Telegram");
+                            };
+                            if (!canUseAi()) {
+                              if (event.highPriority) await publish(highPriorityFallback(article, event));
+                              else store.remember(article, false);
+                              continue;
+                            }
                             try {
-                                        const snapshot = await marketSnapshot();
-                                        const enrichedArticle = snapshot ? { ...article, summary: `${article.summary}\n\nSnapshot pasar saat headline diterima: ${snapshot}` } : article;
-                                        const decision = await editor.assess(enrichedArticle);
-                                        if (decision.material && decision.telegramMessage) {
-                                                      for (const destination of telegramDestinations) {
-                                                                      try {
-                                                                                        await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, destination, decision.telegramMessage);
-                                                                      } catch (sendError) {
-                                                                                        log.error({ err: sendError, chatId: destination.chatId, title: article.title }, "Telegram send failed for one destination; other destinations unaffected");
-                                                                      }
-                                                      }
-                                                      store.remember(article, true);
-                                                      log.info({ provider: article.provider, title: article.title, url: article.url }, "Article sent to Telegram");
-                                        }
-                                        else {
-                                                      store.remember(article, false);
-                                                      log.info({ provider: article.provider, title: article.title, material: decision.material, confidence: decision.confidence, reason: decision.reason }, "Article assessed not material; skipped");
-                                        }
+                              const snapshot = await marketSnapshot();
+                              const eventContext = `\n\nEvent intelligence: score ${event.score}/100; high-priority=${event.highPriority}; reasons=${event.reasons.join("; ")}. Analyze what changed and the transmission EVENT → OIL/RISK → INFLATION EXPECTATIONS → TREASURY YIELDS → DXY → XAU; do not wait for price confirmation.`;
+                              const enrichedArticle = { ...article, summary: `${article.summary}${snapshot ? `\n\nSnapshot pasar saat headline diterima: ${snapshot}` : ""}${eventContext}` };
+                              const decision = await editor.assess(enrichedArticle);
+                              if (decision.material && decision.telegramMessage) await publish(decision.telegramMessage);
+                              else if (event.highPriority) await publish(highPriorityFallback(article, event));
+                              else {
+                                store.remember(article, false);
+                                log.info({ provider: article.provider, title: article.title, score: event.score, material: decision.material, confidence: decision.confidence, reason: decision.reason }, "Event assessed below publish threshold");
+                              }
                             } catch (error) {
-                                        store.remember(article, false);
-                                        log.error({ err: error, title: article.title }, "Article processing failed; article skipped safely");
+                              if (event.highPriority) await publish(highPriorityFallback(article, event));
+                              else store.remember(article, false);
+                              log.error({ err: error, title: article.title, score: event.score, highPriority: event.highPriority }, "Event analysis failed");
                             }
                   }
           } catch (error) {
