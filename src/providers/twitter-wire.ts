@@ -5,8 +5,8 @@ const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "un
 const QUERY = [
   `(${WIRE_ACCOUNTS.map((handle) => `from:${handle}`).join(" OR ")})`,
   `(Fed OR Powell OR Waller OR Bowman OR Barr OR Cook OR Jefferson OR "rate cut" OR "rate hike"`,
-  `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU OR "Fed officials")`
-].join(" " );
+  `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU OR "Fed officials"`,
+  `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " );
 
 type XApiTweet = { id: string; text: string; created_at: string; author_id: string };
 type XApiUser = { id: string; username: string };
