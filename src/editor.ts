@@ -17,7 +17,10 @@ const decisionSchema = z.object({
   biasUsd: z.enum(["Bullish", "Bearish", "Netral", "Belum terkonfirmasi"]).nullable().default(null),
   biasXau: z.enum(["Bullish", "Bearish", "Netral", "Belum terkonfirmasi"]).nullable().default(null),
   alasanAnalis: z.string().nullable().default(null),
-  catatanAksi: z.string().nullable().default(null)
+  catatanAksi: z.string().nullable().default(null),
+  // Accept the legacy complete-message shape too; it is a safe recovery path
+  // when a model supplies sound analysis but omits one of the presentation fields.
+  telegramMessage: z.string().nullable().optional()
 }).passthrough();
 const instructions = `You are the institutional real-time macro and news-intelligence desk for HitnRun FX, run to the standard of a bank/hedge-fund trading-desk newsfeed, not a retail aggregator. Your single focus is USD Index (DXY) and XAUUSD, and the audience is professional traders who need every genuinely material catalyst, not a filtered highlight reel.
 MANDATORY COVERAGE -- treat all of the following as in-scope, not just headline data prints: (1) Geopolitics: war, ceasefires, sanctions, nuclear threats, Hormuz/Red Sea/Black Sea shipping disruption, terrorist attacks, coups, major elections with market implications. (2) US macro data: CPI, core CPI, PCE, core PCE, PPI, NFP, unemployment claims, retail sales, ISM/PMI, GDP, consumer confidence, housing data, and REVISIONS to any of these (a revision can move markets as much as the original print). (3) Central banks: Fed/FOMC decisions, dot plot, minutes, and speeches/interviews/testimony from ANY voting or regional Fed official (Warsh -- the sitting Fed Chair since May 2026 -- Powell, Waller, Bowman, Barr, Cook, Jefferson, Williams, Daly, Bostic, Goolsbee, Logan, Musalem, Schmid, Collins, Hammack, Kashkari, and any successor); also ECB, BOE, BOJ, PBOC, and any G10/major EM central bank policy surprise. (4) Rates and funding-market plumbing: US10Y and real (TIPS) yields, 2s10s curve moves, Treasury auction results (bid-to-cover, tail size, indirect bidder share), Fed balance sheet/QT pace changes, SOFR/repo market stress, debt-ceiling and US government-shutdown risk, and any US sovereign credit-rating action or outlook change by S&P/Moody's/Fitch. (5) Gold-specific institutional flow: gold ETF creation/redemption (GLD/IAU flows), COMEX open interest and delivery notices/inventory changes, central-bank gold reserve purchases or sales in any country, de-dollarization or reserve-diversification moves by central banks or sovereign wealth funds, and major physical demand shifts in China/India including import duty or policy changes. (6) Cross-asset: DXY, US10Y, Nasdaq, S&P 500, oil (WTI/Brent, especially OPEC+ supply decisions), VIX, Bitcoin/crypto risk-appetite spillover, and any moment gold visibly decouples from its normal correlation to real yields or DXY -- a decoupling is itself a material, reportable event. (7) Tariffs and trade policy with a plausible inflation or dollar-liquidity transmission channel.
@@ -86,11 +89,32 @@ export class Editor {
     // fields needed to assemble the message are missing, convert it to a
     // safe rejection and remember the article instead of sending a broken one.
     if (decision.material) {
-      const { waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi } = decision;
+      const { waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi, telegramMessage: legacyTelegramMessage } = decision;
       if (waktuWIB === null || levelDampak === null || statusTag === null || judul === null || ringkasan === null || biasUsd === null || biasXau === null || alasanAnalis === null || catatanAksi === null) {
-const missingFields = Object.entries({ waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi }).filter(([, v]) => v === null).map(([k]) => k);
-                  console.warn({ title: article.title, provider: article.provider, missingFields }, "AI marked article material=true but omitted required fields; dropping to a safe rejection instead of sending a broken message");
-        return { material: false, confidence: decision.confidence, reason: "Output analisis tidak lengkap; artikel dilewati secara aman.", telegramMessage: null };
+        const missingFields = Object.entries({ waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi }).filter(([, v]) => v === null).map(([k]) => k);
+        // Do not silently lose a valid XAU catalyst because an otherwise valid
+        // response missed presentation metadata. Prefer a legacy completed post,
+        // otherwise publish a clearly-labeled neutral fallback based only on
+        // the supplied headline and summary.
+        if (legacyTelegramMessage?.trim()) {
+          console.warn({ title: article.title, provider: article.provider, missingFields }, "Using legacy complete Telegram message after structured fields were incomplete");
+          return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage: legacyTelegramMessage.trim() };
+        }
+        const fallbackTime = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", hour12: false }).format(article.publishedAt);
+        const fallbackMessage = [
+          `<b>${fallbackTime} WIB | Level Dampak: 3 | BREAKING/UNVERIFIED</b>`,
+          `<b>${escapeHtml(article.title)}</b>`,
+          "",
+          `<b>Ringkasan:</b> ${escapeHtml(article.summary)}`,
+          "",
+          "<b>Bias Dampak:</b> USD Belum terkonfirmasi | Emas Belum terkonfirmasi",
+          "",
+          "<b>Alasan Analis:</b> Headline ini lolos sebagai katalis material untuk USD dan emas. Detail dampak arahnya belum bisa dipastikan karena respons analisis terstruktur tidak lengkap; fakta headline tetap dikirim agar tidak terlewat.",
+          "",
+          "<b>Kesimpulan 1-4 Jam:</b> Ada risiko pergerakan meningkat, tetapi arah bersih belum terkonfirmasi dari data yang tersedia."
+        ].join("\n");
+        console.warn({ title: article.title, provider: article.provider, missingFields }, "Publishing neutral fallback after structured fields were incomplete");
+        return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage: fallbackMessage };
       }
       if (levelDampak < 3) {
         return { material: false, confidence: decision.confidence, reason: "Dampak di bawah level 3; artikel ditahan.", telegramMessage: null };
