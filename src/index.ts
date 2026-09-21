@@ -73,6 +73,7 @@ async function tick(): Promise<void> {
               }
             }
             store.remember(article, true);
+            log.info({ provider: article.provider, title: article.title, url: article.url }, "Article sent to Telegram");
           }
           else store.remember(article, false);
         } catch (error) {
