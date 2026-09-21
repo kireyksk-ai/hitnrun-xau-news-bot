@@ -7,7 +7,8 @@
     "dev": "node --watch dist/index.js",
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
