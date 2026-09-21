@@ -35,9 +35,9 @@ function causalChannel(text: string): string | null {
   if (mediaOrPersonal.test(text) && !/\b(announces?|orders?|imposes?|approves?|cancels?|withdraws?|cuts?|hikes?)\b.{0,90}\b(tariffs?|sanctions?|rates?|oil|iran policy|fed policy|tax policy)\b/i.test(text)) return null;
   if (macro.test(text) && surprise.test(text)) return "DATA → FED_EXPECTATIONS → YIELDS/USD → XAU";
   if (trade.test(text) && materialAction.test(text)) return "TRADE/SANCTIONS → INFLATION/GROWTH → FED/USD → XAU";
-  if (energy.test(text) && materialAction.test(text)) return "OIL_SUPPLY → INFLATION/RISK → YIELDS/USD → XAU";
+  if ((energy.test(text) || /\b(vessels? trickle|shipping flow|tanker flow|transit (?:falls|slows)|strait of hormuz)\b/i.test(text)) && (materialAction.test(text) || /\b(vessels? trickle|shipping flow|tanker flow|transit (?:falls|slows)|strait of hormuz)\b/i.test(text))) return "OIL_SUPPLY → INFLATION/RISK → YIELDS/USD → XAU";
   if (geo.test(text) && materialAction.test(text)) return "GEOPOLITICAL_CHANGE → OIL/RISK → INFLATION/USD → XAU";
-  if (rates.test(text) && materialAction.test(text)) return "POLICY/RATES → YIELDS → DXY → XAU";
+  if (rates.test(text) && (materialAction.test(text) || /\b(fed|fomc)\b.{0,100}\b(inflation|demand|rate path|policy restraint|higher for longer)\b/i.test(text))) return "POLICY/RATES → YIELDS → DXY → XAU";
   return null;
 }
 const actionTerms = /\b(rejects?|denies?|cancels?|rules out|agrees?|accepts?|meets?|meeting|talks?|negotiat\w*|attacks?|strikes?|missiles?|ceasefires?|imposes?|sanctions?|cuts?|hikes?|holds?|raises?|announces?|confirms?|disrupt\w*|shuts?|reopens?|resumes?)\b/gi;
@@ -122,4 +122,3 @@ export function shouldReview(event: EventAssessment, prior?: StoryState): boolea
   if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
   return event.highPriority || event.importance >= 65;
 }
-

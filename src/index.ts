@@ -14,12 +14,14 @@ import { TreasuryPressProvider } from "./providers/treasury-press.js";
 import { TwitterWireProvider } from "./providers/twitter-wire.js";
 import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
+import { NewsApiProvider } from "./providers/newsapi.js";
 import { discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
 import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
+  ...(config.NEWSAPI_KEY ? [new NewsApiProvider(config.NEWSAPI_KEY, config.NEWSAPI_POLL_SECONDS)] : []),
   ...(config.GNEWS_API_KEY ? [new GNewsProvider(config.GNEWS_API_KEY, config.GNEWS_POLL_INTERVAL_SECONDS)] : []),
   ...(config.GOOGLE_NEWS_RSS_ENABLED ? [new GoogleNewsRssProvider()] : []),
   ...(config.MARKETAUX_API_KEY ? [new MarketauxProvider(config.MARKETAUX_API_KEY, config.MARKETAUX_POLL_SECONDS)] : []),
@@ -165,4 +167,3 @@ async function tick(): Promise<void> {
 await tick();
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
 log.info({ providers: providers.map((p) => p.name), adminEnabled: Boolean(config.TELEGRAM_ADMIN_CHAT_ID) }, "Market intelligence worker started");
-

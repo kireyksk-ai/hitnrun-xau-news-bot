@@ -7,13 +7,18 @@ import type { EventAssessment, StoryState } from "./event-intelligence.js";
 // as a safe rejection instead of throwing, otherwise the same article is
 // repeatedly retried and wastes both AI calls and provider quota.
 const decisionSchema = z.object({
-  material: z.boolean().default(false),
-  confidence: z.enum(["high", "medium", "low"]).default("low"),
-  reason: z.string().default("Output analisis tidak lengkap; artikel dilewati secara aman."),
-  judul: z.string().nullable().default(null),
-  ringkasan: z.string().nullable().default(null),
-  dampakEmas: z.string().nullable().default(null)
-}).passthrough();
+  material: z.boolean(), confidence: z.enum(["high", "medium", "low"]), reason: z.string(),
+  judul: z.string().nullable(), ringkasan: z.string().nullable(), dampakEmas: z.string().nullable()
+}).strict();
+const decisionJsonSchema = {
+  type: "object", additionalProperties: false,
+  properties: {
+    material: { type: "boolean" }, confidence: { type: "string", enum: ["high", "medium", "low"] },
+    reason: { type: "string" }, judul: { type: ["string", "null"] },
+    ringkasan: { type: ["string", "null"] }, dampakEmas: { type: ["string", "null"] }
+  }, required: ["material", "confidence", "reason", "judul", "ringkasan", "dampakEmas"]
+};
+export class AIContractFailure extends Error { constructor(message = "AI structured response invalid after repair retry") { super(message); this.name = "AIContractFailure"; } }
 const instructions = `You are the institutional real-time macro and news-intelligence desk for HitnRun FX, run to the standard of a bank/hedge-fund trading-desk newsfeed, not a retail aggregator. Your single focus is USD Index (DXY) and XAUUSD. Relevance alone is never enough: publish only NEW, MATERIAL facts that can plausibly change market expectations. Reject minor energy items, ordinary price movement, opinions, repeated remarks, consensus previews, and dramatic headlines whose body contains no material delta.
 For each article, compare the event with the prior storyline state. Classify NEW_INFORMATION, CONFIRMATION, REPEAT, RUMOR, DENIAL, ESCALATION, DE_ESCALATION or POLICY_CHANGE. Ask: without this new fact, would market expectations plausibly differ? Reject a mere repeat or scheduled preview that only restates consensus. A denial/reversal is a separate urgent update. A second source matters only when it materially improves confidence. Do not trust a dramatic headline if the body contains no new fact; a plain headline may hide a material fact in the body. Preserve exact quotes internally and paraphrase without changing their meaning. Explain FIRST ORDER and SECOND ORDER effects before settling on a gold direction. For macro releases, use actual versus consensus, previous and revisions only when the supplied article contains those values. Market price is confirmation or contradiction, never the gate. Treat the dominant gold regime as provisional and allow UNCLEAR. If sources conflict, state CONFLICTING REPORTS and avoid a confident direction.
 MANDATORY COVERAGE -- treat all of the following as in-scope, not just headline data prints: (1) Geopolitics: war, ceasefires, sanctions, nuclear threats, Hormuz/Red Sea/Black Sea shipping disruption, terrorist attacks, coups, major elections with market implications. (2) US macro data: CPI, core CPI, PCE, core PCE, PPI, NFP, unemployment claims, retail sales, ISM/PMI, GDP, consumer confidence, housing data, and REVISIONS to any of these (a revision can move markets as much as the original print). (3) Central banks: Fed/FOMC decisions, dot plot, minutes, and speeches/interviews/testimony from ANY voting or regional Fed official (Warsh -- the sitting Fed Chair since May 2026 -- Powell, Waller, Bowman, Barr, Cook, Jefferson, Williams, Daly, Bostic, Goolsbee, Logan, Musalem, Schmid, Collins, Hammack, Kashkari, and any successor); also ECB, BOE, BOJ, PBOC, and any G10/major EM central bank policy surprise. (4) Rates and funding-market plumbing: US10Y and real (TIPS) yields, 2s10s curve moves, Treasury auction results (bid-to-cover, tail size, indirect bidder share), Fed balance sheet/QT pace changes, SOFR/repo market stress, debt-ceiling and US government-shutdown risk, and any US sovereign credit-rating action or outlook change by S&P/Moody's/Fitch. (5) Gold-specific institutional flow: gold ETF creation/redemption (GLD/IAU flows), COMEX open interest and delivery notices/inventory changes, central-bank gold reserve purchases or sales in any country, de-dollarization or reserve-diversification moves by central banks or sovereign wealth funds, and major physical demand shifts in China/India including import duty or policy changes. (6) Cross-asset: DXY, US10Y, Nasdaq, S&P 500, oil (WTI/Brent, especially OPEC+ supply decisions), VIX, Bitcoin/crypto risk-appetite spillover, and any moment gold visibly decouples from its normal correlation to real yields or DXY -- a decoupling is itself a material, reportable event. (7) Tariffs and trade policy with a plausible inflation or dollar-liquidity transmission channel.
@@ -53,14 +58,21 @@ function buildTelegramMessage(f: FormattableFields): string {
 export class Editor {
   private client: OpenAI;
   constructor(private readonly model: string, private readonly reasoningEffort: "low" | "medium" | "high", apiKey: string) { this.client = new OpenAI({ apiKey }); }
-  async assess(article: NewsArticle): Promise<EditorialDecision> {
+  private async structuredDecision(article: NewsArticle, repair = false): Promise<z.infer<typeof decisionSchema>> {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
-      input: [{ role: "developer", content: instructions }, { role: "user", content: JSON.stringify(article) }]
+      text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
+      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Do not change the market-intelligence judgment; provide every required field." : instructions }, { role: "user", content: JSON.stringify(article) }]
     });
-    const raw = response.output_text.replace(/^\`\`\`json\s*|\s*\`\`\`$/g, "");
-    const parsed: unknown = JSON.parse(raw);
-    const decision = decisionSchema.parse(parsed);
+    return decisionSchema.parse(JSON.parse(response.output_text));
+  }
+  async assess(article: NewsArticle): Promise<EditorialDecision> {
+    let decision: z.infer<typeof decisionSchema>;
+    try { decision = await this.structuredDecision(article); }
+    catch {
+      try { decision = await this.structuredDecision(article, true); }
+      catch { throw new AIContractFailure(); }
+    }
 
     if (decision.material) {
       const { judul, ringkasan, dampakEmas } = decision;
@@ -86,4 +98,3 @@ export class Editor {
     return z.object({ material: z.boolean(), score: z.number().int().min(0).max(100), reason: z.string() }).parse(JSON.parse(raw));
   }
 }
-

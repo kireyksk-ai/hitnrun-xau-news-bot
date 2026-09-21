@@ -11,6 +11,7 @@ const schema = z.object({
     TELEGRAM_ADMIN_USER_ID: z.coerce.number().int().positive().optional(),
     ADMIN_REPORT_HOUR_WIB: z.coerce.number().int().min(0).max(23).default(8),
     NEWSAPI_KEY: z.string().optional(),
+    NEWSAPI_POLL_SECONDS: z.coerce.number().int().min(60).default(120),
     GNEWS_API_KEY: z.string().optional(),
     MARKETAUX_API_KEY: z.string().optional(),
     MARKETAUX_POLL_SECONDS: z.coerce.number().int().min(300).default(1200),
@@ -40,4 +41,3 @@ const schema = z.object({
 });
 
 export const config = schema.parse(process.env);
-

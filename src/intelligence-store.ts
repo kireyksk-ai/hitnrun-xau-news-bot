@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 
-export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
+export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
   id: string; article: NewsArticle; event: EventAssessment; stage: DecisionStage;
   primaryDecision: "SEND" | "DROP" | "REVIEW"; reason: string;
@@ -12,6 +12,9 @@ export type ReviewRecord = {
   renderedMessage?: string;
   sentAt?: string; telegramMessageIds?: Record<string, number>;
   adminDecision?: "FALSE_NEGATIVE" | "FALSE_POSITIVE"; adminReason?: string;
+  audit?: { provider: string; normalizedEvent: string; prefilter: "REVIEW" | "REJECT"; storyMatch: string;
+    aiCalled: boolean; schema: "VALID" | "INVALID" | "NOT_CALLED"; repairAttempted: boolean; fallbackAttempted: boolean;
+    outcome: "INTELLIGENCE_NOT_MATERIAL" | "AI_CONTRACT_FAILURE" | "FORMATTER_FAILURE" | "TELEGRAM_FAILURE" | "SEND" | "PENDING" };
 };
 type Metrics = { ingested: number; uniqueEvents: number; alertsSent: number; duplicatesRemoved: number;
   lowValueRejected: number; unverifiedRejected: number; highRiskMisses: number;
@@ -196,4 +199,3 @@ export class IntelligenceStore {
   lastReportDay(): string | undefined { return this.data.lastReportDay; }
   setLastReportDay(day: string): void { this.data.lastReportDay = day; this.save(); }
 }
-
