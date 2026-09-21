@@ -1,71 +1,101 @@
+import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 
 export type ChangeType = "NEW_INFORMATION" | "CONFIRMATION" | "REPEAT" | "RUMOR" | "DENIAL" | "ESCALATION" | "DE_ESCALATION" | "POLICY_CHANGE";
 export type SourceTier = 1 | 2 | 3;
+export type StoryState = { key: string; lastAction: string; lastFact: string; lastChange: ChangeType; updatedAt: string; sent: boolean };
 export type EventAssessment = {
-  key: string; storyKey: string; action: string; changeType: ChangeType; sourceTier: SourceTier;
-  score: number; importance: number; urgency: number; highPriority: boolean; reasons: string[];
+  key: string; storyKey: string; action: string; fact: string; entities: string[];
+  changeType: ChangeType; sourceTier: SourceTier; sourceConfidence: number;
+  importance: number; urgency: number; novelty: number; marketRelevance: number;
+  informationDelta: number; directionConfidence: number; highPriority: boolean;
+  unscheduled: boolean; transmissionChannels: string[]; quotedText?: string;
+  publishedAt: string; eventTime: string; firstSeenAt: string; lastUpdatedAt: string;
+  reasons: string[];
 };
 
-const HIGH_PRIORITY: Array<{ story: string; pattern: RegExp; label: string }> = [
-  { story: "trump-policy-geopolitics", pattern: /\b(trump|donald trump)\b[\s\S]{0,240}\b(iran|russia|china|tariff|sanction|oil|fed|rate|dollar|treasury|trade|war)\b/i, label: "statement Trump yang berpotensi mengubah kebijakan atau konflik" },
-  { story: "fed-rates", pattern: /\b(fed|fomc|powell|goolsbee|waller|warsh|daly|bostic|williams|bowman|jefferson)\b[\s\S]{0,240}\b(rate|rates|interest|inflation|policy|cut|hike|hold|yield)\b/i, label: "keputusan atau delta statement Fed" },
-  { story: "us-macro", pattern: /\b(cpi|pce|nfp|nonfarm|payroll|unemployment|wages|gdp|ism|retail sales|jobless claims)\b/i, label: "rilis atau revisi data makro AS" },
-  { story: "middle-east-conflict", pattern: /\b(iran|israel|saudi|houthi|hormuz)\b[\s\S]{0,260}\b(attack|strike|missile|ceasefire|negotia|meet|talk|ultimatum|sanction|war|diploma|reject)\b/i, label: "delta konflik atau diplomasi Timur Tengah" },
-  { story: "oil-supply-logistics", pattern: /\b(oil|crude|brent|wti|tanker|shipping|hormuz|opec|aramco|saudi)\b[\s\S]{0,260}\b(supply|output|production|disruption|shortage|sanction|tanker|shipping|freight|export|refinery)\b/i, label: "delta supply atau logistik energi" },
-  { story: "trade-sanctions", pattern: /\b(tariff|sanction|trade)\b[\s\S]{0,260}\b(us|u\.s\.|america|china|iran|russia|oil|energy)\b/i, label: "perubahan tarif atau sanksi" }
-];
+const entities = ["trump", "iran", "israel", "saudi", "hormuz", "houthi", "fed", "fomc", "treasury", "opec", "russia", "china"];
+const scheduled = /\b(cpi|pce|nfp|nonfarm payroll|gdp|ism|retail sales|jobless claims|fomc decision|treasury auction)\b/i;
+const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll)\b/i;
+const authority = /\b(trump|white house|president|fed|fomc|powell|goolsbee|waller|treasury|bessent|iran|israel|saudi|houthi|opec)\b/i;
+const materialAction = /\b(announces?|orders?|imposes?|approves?|rejects?|denies?|cancels?|withdraws?|rules out|agrees?|accepts?|offers?|open to meeting|attacks?|strikes?|launches?|ceasefire|ultimatum|disrupts?|shuts? down|reopens?|resumes?|hikes?|cuts?|raises?|vot(?:es|ed)|surges?|plunges?)\b/i;
+const materialObject = /\b(iran|hormuz|war|ceasefire|oil supply|oil exports?|energy facilities|tanker|shipping|sanctions?|tariffs?|fed|fomc|interest rates?|rates?|inflation|treasury yields?|dollar|cpi|pce|nfp|payroll|opec)\b/i;
+const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|unchanged|reiterates?|repeats?|no new details)\b/i;
+const actionTerms = /\b(rejects?|denies?|cancels?|rules out|agrees?|accepts?|meets?|meeting|talks?|negotiat\w*|attacks?|strikes?|missiles?|ceasefires?|imposes?|sanctions?|cuts?|hikes?|holds?|raises?|announces?|confirms?|disrupt\w*|shuts?|reopens?|resumes?)\b/gi;
 
-function normalized(text: string): string { return text.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
-
-function sourceTier(article: NewsArticle): SourceTier {
+export function sourceTier(article: NewsArticle): SourceTier {
   const source = `${article.sourceName ?? ""} ${article.provider}`.toLowerCase();
   if (/federal reserve|treasury|white house|bureau of labor|bea|eia|central bank|government|truth social/.test(source)) return 1;
-  if (/reuters|bloomberg|associated press|\bap\b|financial times|benzinga|firstsquawk|livesquawk|deltaone/.test(source)) return 2;
+  if (/reuters|bloomberg|associated press|financial times|benzinga|firstsquawk|livesquawk|deltaone/.test(source)) return 2;
   return 3;
 }
-
-function classifyChange(text: string): ChangeType {
-  if (/\b(denies|denied|rejects|rejected|rules out|cancels|cancelled|withdraws|withdrawn)\b/i.test(text)) return "DENIAL";
-  if (/\b(attack|strike|missile|ultimatum|deploys|imposes|sanctions|escalat)\w*/i.test(text)) return "ESCALATION";
-  if (/\b(ceasefire|talks|meeting|meet|negotiat|de-escalat|agrees)\w*/i.test(text)) return "DE_ESCALATION";
-  if (/\b(announces|approved|decision|cuts?|hikes?|hold|tariff|policy|guidance)\b/i.test(text)) return "POLICY_CHANGE";
+export function classifyChange(text: string): ChangeType {
+  if (/\b(denies?|rejects?|rules out|cancels?|withdraws?)\b/i.test(text)) return "DENIAL";
+  if (/\b(attacks?|strikes?|missiles?|ultimatum|escalat\w*|shuts? down)\b/i.test(text)) return "ESCALATION";
+  if (/\b(ceasefire|talks?|meet\w*|negotiat\w*|de-escalat\w*|agrees?|reopens?|resumes?)\b/i.test(text)) return "DE_ESCALATION";
+  if (/\b(announces?|approves?|decision|cuts?|hikes?|holds?|tariff|policy|guidance|imposes?|sanctions?)\b/i.test(text)) return "POLICY_CHANGE";
   if (/\b(confirms?|officially|verified)\b/i.test(text)) return "CONFIRMATION";
-  if (/\b(reports?|rumou?r|said to|sources say)\b/i.test(text)) return "RUMOR";
+  if (/\b(rumou?r|sources say|said to|unconfirmed)\b/i.test(text)) return "RUMOR";
   return "NEW_INFORMATION";
 }
-
-export function assessEvent(article: NewsArticle): EventAssessment {
+function normalize(text: string): string { return text.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
+function storyKeyFor(text: string): string {
+  const t = text.toLowerCase();
+  if (/iran|hormuz|israel|saudi|houthi/.test(t)) return "iran-gulf-conflict";
+  const release = t.match(/\b(cpi|pce|nfp|payroll|gdp|ism|retail sales|jobless claims)\b/);
+  if (release) return `us-macro-${release[1].replaceAll(" ", "-")}`;
+  if (/fed|fomc|powell|goolsbee|waller|warsh|rate/.test(t)) return "fed-policy";
+  if (/oil|crude|brent|wti|opec|tanker/.test(t)) return "oil-supply";
+  if (/tariff|sanction|trade/.test(t)) return "trade-sanctions";
+  return `other-${createHash("sha256").update(normalize(text).slice(0, 80)).digest("hex").slice(0, 12)}`;
+}
+export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = new Date()): EventAssessment {
   const text = `${article.title} ${article.summary}`;
-  const lower = normalized(text);
-  const tier = sourceTier(article);
-  const changeType = classifyChange(text);
-  const rule = HIGH_PRIORITY.find((candidate) => candidate.pattern.test(text));
-  const reasons: string[] = [];
-  let importance = tier === 1 ? 40 : tier === 2 ? 28 : 15;
-  if (rule) { importance += 45; reasons.push(rule.label); }
-  if (/\b(gold|xau|dxy|treasury|yield|inflation|oil|crude|brent|wti|fed|rate|war|iran|hormuz|sanction|tariff)\b/i.test(text)) importance += 15;
-  if (changeType === "DENIAL" || changeType === "ESCALATION" || changeType === "DE_ESCALATION" || changeType === "POLICY_CHANGE") importance += 10;
-  if (tier === 1) reasons.push("sumber primer"); else if (tier === 2) reasons.push("sumber tier-2"); else reasons.push("sumber tier-3");
-
-  const actors = (lower.match(/\b(trump|iran|israel|saudi|houthi|fed|opec|russia|china|treasury)\b/g) ?? []).slice(0, 3).join("-");
-  const action = (lower.match(/\b(meet|meeting|agree|approve|impose|launch|strike|ceasefire|negotia\w*|cut|hike|hold|increase|decrease|disrupt\w*|attack\w*|reject\w*|deny\w*)\b/g) ?? []).slice(0, 3).join("-") || changeType.toLowerCase();
-  const storyKey = (rule ? `${rule.story}-${actors}` : lower.split(" ").slice(0, 6).join("-")).slice(0, 100);
-  const score = Math.min(importance, 100);
-  const highPriority = Boolean(rule) && (tier <= 2 || article.provider === "truth-social-trump");
-  const urgency = Math.min(100, (highPriority ? 90 : 35) + (changeType === "DENIAL" || changeType === "ESCALATION" ? 10 : 0));
-  return { key: `${storyKey}-${action}`.slice(0, 120), storyKey, action, changeType, sourceTier: tier, score, importance: score, urgency, highPriority, reasons };
+  const fact = normalize(text).slice(0, 360);
+  const tier = sourceTier(article), changeType = classifyChange(text), storyKey = storyKeyFor(text);
+  const namedEntities = entities.filter((entity) => new RegExp(`\\b${entity}\\b`, "i").test(text));
+  const actions = [...text.matchAll(actionTerms)].map((match) => match[0].toLowerCase()).slice(0, 3);
+  const action = actions.join("-") || changeType.toLowerCase();
+  const key = createHash("sha256").update(`${storyKey}|${action}|${fact.slice(0, 180)}`).digest("hex");
+  const hasNewFact = !prior || prior.lastFact !== fact;
+  const reversal = Boolean(prior && ((changeType === "DENIAL" && prior.lastChange !== "DENIAL") || (prior.lastChange === "DENIAL" && changeType !== "DENIAL")));
+  const informationDelta = !hasNewFact ? 0 : reversal ? 100 : prior?.lastAction === action ? 45 : 80;
+  const novelty = !hasNewFact ? 0 : prior ? informationDelta : 90;
+  const marketRelevance = relevant.test(text) ? 80 : 10;
+  const sourceConfidence = tier === 1 ? 95 : tier === 2 ? 80 : 45;
+  const hasMaterialAction = materialAction.test(text);
+  const hasMaterialObject = materialObject.test(text);
+  const highPriority = tier <= 2 && authority.test(text) && hasMaterialAction && hasMaterialObject && !minorOrCommentary.test(text);
+  const unscheduled = !scheduled.test(text);
+  const materiality = hasMaterialAction && hasMaterialObject ? 85 : hasMaterialObject ? 45 : 10;
+  const importance = Math.min(100, Math.round(sourceConfidence * 0.15 + novelty * 0.15 + marketRelevance * 0.15 + informationDelta * 0.15 + materiality * 0.4 + (highPriority ? 8 : 0) - (minorOrCommentary.test(text) ? 35 : 0)));
+  const urgency = Math.min(100, importance + (unscheduled ? 15 : 0) + (reversal ? 15 : 0));
+  const transmissionChannels: string[] = [];
+  if (/iran|hormuz|saudi|houthi|oil|crude|tanker|opec/i.test(text)) transmissionChannels.push("OIL_SUPPLY", "INFLATION_EXPECTATIONS");
+  if (/fed|fomc|cpi|pce|nfp|payroll|inflation|rate/i.test(text)) transmissionChannels.push("FED_PATH", "TREASURY_YIELDS", "DXY");
+  if (/war|attack|missile|ceasefire|meeting|negotiat|sanction/i.test(text)) transmissionChannels.push("GEOPOLITICAL_RISK");
+  if (/treasury|yield/i.test(text)) transmissionChannels.push("TREASURY_YIELDS", "DXY");
+  transmissionChannels.push("XAU");
+  const quotedText = text.match(/[“"]([^”"]{5,250})[”"]/)?.[1];
+  const reasons = [`source tier ${tier}`, `change ${changeType}`, `delta ${informationDelta}`];
+  if (reversal) reasons.push("reversal of prior story");
+  return { key, storyKey, action, fact, entities: namedEntities, changeType, sourceTier: tier, sourceConfidence,
+    importance, urgency, novelty, marketRelevance, informationDelta, directionConfidence: 0, highPriority,
+    unscheduled, transmissionChannels: [...new Set(transmissionChannels)], quotedText,
+    publishedAt: article.publishedAt.toISOString(), eventTime: article.publishedAt.toISOString(),
+    firstSeenAt: seenAt.toISOString(), lastUpdatedAt: seenAt.toISOString(), reasons };
 }
-
+export function shouldReview(event: EventAssessment, prior?: StoryState): boolean {
+  if (event.informationDelta === 0) return false;
+  if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
+  return event.highPriority || event.importance >= 65;
+}
 export function highPriorityFallback(article: NewsArticle, event: EventAssessment): string {
-  const time = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", hour12: false }).format(article.publishedAt);
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return [
-    `⚠️ <b>${escape(article.title)}</b>`,
-    `<b>${time} WIB | Importance ${event.importance}/100 | Urgency ${event.urgency}/100 | ${event.changeType}</b>`,
-    "",
-    escape(article.summary),
-    "",
-    "<b>Kenapa penting:</b> Event ini dapat mengubah risk premium, oil dan ekspektasi inflasi; jalur lanjutannya ke yield Treasury dan DXY menentukan dampak bersih ke emas. Arah belum dipaksakan sebelum transmisi pasar terkonfirmasi."
-  ].join("\n");
+  const ageMinutes = Math.round((Date.now() - article.publishedAt.getTime()) / 60000);
+  const age = ageMinutes > 60 ? ` (terbit ${ageMinutes} menit lalu)` : "";
+  return [`⚠️ <b>${escape(article.title)}</b>`, `<b>${event.changeType}${age}</b>`,
+    escape(article.summary || "Detail tambahan belum tersedia."),
+    "Perubahan ini bisa memengaruhi risk premium, oil atau ekspektasi rate; dampak akhir ke emas masih dua arah sampai jalur inflasi, yield dan dolar jelas."].join("\n\n");
 }
+

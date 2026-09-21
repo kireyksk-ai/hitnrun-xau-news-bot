@@ -7,6 +7,9 @@ const schema = z.object({
     TELEGRAM_CHAT_ID: z.string().optional().transform((value) => value?.trim() || undefined),
     TELEGRAM_MESSAGE_THREAD_ID: z.coerce.number().int().positive().optional(),
     TELEGRAM_CHAT_ID_REGULAR: z.string().optional().transform((value) => value?.trim() || undefined),
+    TELEGRAM_ADMIN_CHAT_ID: z.string().optional().transform((value) => value?.trim() || undefined),
+    TELEGRAM_ADMIN_USER_ID: z.coerce.number().int().positive().optional(),
+    ADMIN_REPORT_HOUR_WIB: z.coerce.number().int().min(0).max(23).default(8),
     NEWSAPI_KEY: z.string().optional(),
     GNEWS_API_KEY: z.string().optional(),
     MARKETAUX_API_KEY: z.string().optional(),
@@ -37,3 +40,4 @@ const schema = z.object({
 });
 
 export const config = schema.parse(process.env);
+
