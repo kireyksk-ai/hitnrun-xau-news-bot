@@ -3,11 +3,11 @@ import type { NewsArticle, NewsProvider } from "../types.js";
 const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "unusual_whales", "financialjuice", "WatcherGuru"];
 
 const QUERY = [
-      `(${WIRE_ACCOUNTS.map((handle) => `from:${handle}`).join(" OR ")})`,
-      `(Fed OR Powell OR Waller OR Bowman OR Barr OR Cook OR Jefferson OR Williams OR Daly OR Bostic`,
-      `OR Goolsbee OR Logan OR Musalem OR Schmid OR Collins OR Hammack OR Kashkari`,
-      `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU`,
-      `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " );
+        `(${WIRE_ACCOUNTS.map((handle) => `from:${handle}`).join(" OR ")})`,
+        `(Fed OR Powell OR Warsh OR Waller OR Bowman OR Cook OR Jefferson OR Williams OR Daly OR Bostic`,
+        `OR Goolsbee OR Logan OR Musalem OR Schmid OR Collins OR Hammack OR Kashkari`,
+        `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU`,
+        `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " );
 
 type XApiTweet = { id: string; text: string; created_at: string; author_id: string };
 type XApiUser = { id: string; username: string };
