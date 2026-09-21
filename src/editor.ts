@@ -10,18 +10,9 @@ const decisionSchema = z.object({
   material: z.boolean().default(false),
   confidence: z.enum(["high", "medium", "low"]).default("low"),
   reason: z.string().default("Output analisis tidak lengkap; artikel dilewati secara aman."),
-  waktuWIB: z.string().nullable().default(null),
-  levelDampak: z.number().int().min(1).max(5).nullable().default(null),
-  statusTag: z.string().nullable().default(null),
   judul: z.string().nullable().default(null),
   ringkasan: z.string().nullable().default(null),
-  biasUsd: z.enum(["Bullish", "Bearish", "Netral", "Belum terkonfirmasi"]).nullable().default(null),
-  biasXau: z.enum(["Bullish", "Bearish", "Netral", "Belum terkonfirmasi"]).nullable().default(null),
-  alasanAnalis: z.string().nullable().default(null),
-  catatanAksi: z.string().nullable().default(null),
-  // Accept the legacy complete-message shape too; it is a safe recovery path
-  // when a model supplies sound analysis but omits one of the presentation fields.
-  telegramMessage: z.string().nullable().optional()
+  dampakEmas: z.string().nullable().default(null)
 }).passthrough();
 const instructions = `You are the institutional real-time macro and news-intelligence desk for HitnRun FX, run to the standard of a bank/hedge-fund trading-desk newsfeed, not a retail aggregator. Your single focus is USD Index (DXY) and XAUUSD. Relevance alone is never enough: publish only NEW, MATERIAL facts that can plausibly change market expectations. Reject minor energy items, ordinary price movement, opinions, repeated remarks, consensus previews, and dramatic headlines whose body contains no material delta.
 For each article, compare the event with the prior storyline state. Classify NEW_INFORMATION, CONFIRMATION, REPEAT, RUMOR, DENIAL, ESCALATION, DE_ESCALATION or POLICY_CHANGE. Ask: without this new fact, would market expectations plausibly differ? Reject a mere repeat or scheduled preview that only restates consensus. A denial/reversal is a separate urgent update. A second source matters only when it materially improves confidence. Do not trust a dramatic headline if the body contains no new fact; a plain headline may hide a material fact in the body. Preserve exact quotes internally and paraphrase without changing their meaning. Explain FIRST ORDER and SECOND ORDER effects before settling on a gold direction. For macro releases, use actual versus consensus, previous and revisions only when the supplied article contains those values. Market price is confirmation or contradiction, never the gate. Treat the dominant gold regime as provisional and allow UNCLEAR. If sources conflict, state CONFLICTING REPORTS and avoid a confident direction.
@@ -31,18 +22,12 @@ Prioritize Reuters, Bloomberg, AP and official Fed/ECB/BLS/BEA/Treasury releases
 The final USD and gold bias must come from cross-market weighing, never from the headline alone. First identify the theoretical news impulse, then test it against every supplied live reading for XAUUSD, DXY, US10Y, Nasdaq, S&P 500 and oil. Relative strength matters: a small DXY decline with a much larger gold rise supports bullish gold continuation; a small DXY rise with a much larger gold fall supports bearish gold continuation. If DXY and yields rise while gold holds or rises, call out gold relative strength. If DXY falls but gold fails to rise, do not label gold bullish. Apply the inverse logic symmetrically. If live readings are missing, stale or contradictory, use Netral or Belum terkonfirmasi and state why. Missing or mixed live readings must not by themselves turn an otherwise valid impact-3-to-5 headline into material=false. Never invent live confirmation.
 Use source names and URLs internally for verification, but never print media names, agency names, feed names, URLs, citations, attribution in parentheses, or phrases such as "menurut Reuters/Bloomberg" in the Telegram fields. State verified facts directly in the owner's voice.
 Never use simplistic rules such as war=gold bullish or hawkish Fed=gold bearish. Explain the supported causal chain through oil/inflation, US yields, DXY, liquidity, risk appetite or policy expectations. If direction is unclear, say so explicitly.
-When material=true, write in informal but sharp Bahasa Indonesia and populate these separate fields instead of one preformatted block (a formatter will assemble and bold the final message, so keep each field plain text with no markdown/HTML and no manual section labels):
-- waktuWIB: the article's published time converted to WIB, formatted "HH:MM WIB"
-- levelDampak: integer 1-5 impact level
-- statusTag: one of "BREAKING/UNVERIFIED", "CONFIRMED", "URGENT BREAKING/UNVERIFIED" or "URGENT CONFIRMED" (only prefix URGENT per the trigger rule above)
-- judul: short punchy headline, no brackets, no trailing punctuation
-- ringkasan: 2-3 sentences, the core summary only
-- biasUsd: "Bullish" | "Bearish" | "Netral" | "Belum terkonfirmasi"; final conclusion after weighing the supplied live market snapshot
-- biasXau: "Bullish" | "Bearish" | "Netral" | "Belum terkonfirmasi"; final conclusion after weighing the supplied live market snapshot
-- alasanAnalis: the full causal chain, step by step: immediate impulse, what happens to inflation expectations/yields/DXY/liquidity/risk demand, the counterforce that could invalidate the first move, and why the stated USD/XAU bias follows; separate confirmed facts from desk inference; short paragraphs separated by a single newline if it helps readability, never bullet characters
-- catatanAksi: concise desk conclusion supported by the event. Do NOT force a 1-4 hour price prediction. If direction is unclear, say "arah XAU belum jelas" and why. Do not tell readers to monitor, watch, check, wait for, or compare anything themselves. Never output a checklist such as "pantau DXY/US10Y/oil"; no price zones and no investment advice
-CRITICAL: fill all nine fields whenever possible. If a format field cannot be completed, still set material=true for a relevant headline; the system will safely publish the factual headline using its fallback format rather than suppress it.
-When material=false, leave all of the fields above null.
+When material=true, write ONLY three clean fields in natural Indonesian; source text is internal input, NEVER paste an English article, post, tweet or long quote into any field:
+- judul: short Indonesian trader headline, no prefix, no markdown, no metadata
+- ringkasan: what NEW fact happened and what changed, paraphrased in Indonesian, around 30-70 words
+- dampakEmas: concrete causal path to gold, including counterforce/uncertainty where appropriate, around 35-90 words. If direction is unclear, say "arah emas belum jelas". Do not force a 1-4 hour prediction.
+The final NEWS post will be ⚠️ JUDUL, then ringkasan, then dampakEmas. Target 80-180 words total. Never include importance/urgency, classifier labels, debug data, source names, URLs, or raw English in these fields. If unable to produce safe Indonesian prose, return material=true with any missing field null; it will be held for admin review, never replaced with raw source text.
+When material=false, leave judul, ringkasan and dampakEmas null.
 Never mention that this is a bot or an automated message. Return JSON only.`;
 
 
@@ -55,24 +40,14 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-type FormattableFields = {
-  waktuWIB: string; levelDampak: number; statusTag: string; judul: string; ringkasan: string;
-  biasUsd: string; biasXau: string; alasanAnalis: string; catatanAksi: string;
-};
+type FormattableFields = { judul: string; ringkasan: string; dampakEmas: string };
 
 function buildTelegramMessage(f: FormattableFields): string {
   return [
-    `<b>${escapeHtml(f.waktuWIB)} | Level Dampak: ${f.levelDampak} | ${escapeHtml(f.statusTag)}</b>`,
-    `<b>${escapeHtml(f.judul)}</b>`,
-    "",
-    `<b>Ringkasan:</b> ${escapeHtml(f.ringkasan)}`,
-    "",
-    `<b>Bias Dampak:</b> USD ${escapeHtml(f.biasUsd)} | Emas ${escapeHtml(f.biasXau)}`,
-    "",
-    `<b>Alasan Analis:</b>\n${escapeHtml(f.alasanAnalis)}`,
-    "",
-    `<b>Kesimpulan:</b>\n${escapeHtml(f.catatanAksi)}`
-  ].join("\n");
+    `<b>⚠️ ${escapeHtml(f.judul)}</b>`,
+    escapeHtml(f.ringkasan),
+    escapeHtml(f.dampakEmas)
+  ].join("\n\n");
 }
 
 export class Editor {
@@ -87,40 +62,12 @@ export class Editor {
     const parsed: unknown = JSON.parse(raw);
     const decision = decisionSchema.parse(parsed);
 
-    // Never publish a partial response. If it says "material" but any of the
-    // fields needed to assemble the message are missing, convert it to a
-    // safe rejection and remember the article instead of sending a broken one.
     if (decision.material) {
-      const { waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi, telegramMessage: legacyTelegramMessage } = decision;
-      if (waktuWIB === null || levelDampak === null || statusTag === null || judul === null || ringkasan === null || biasUsd === null || biasXau === null || alasanAnalis === null || catatanAksi === null) {
-        const missingFields = Object.entries({ waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi }).filter(([, v]) => v === null).map(([k]) => k);
-        // Do not silently lose a valid XAU catalyst because an otherwise valid
-        // response missed presentation metadata. Prefer a legacy completed post,
-        // otherwise publish a clearly-labeled neutral fallback based only on
-        // the supplied headline and summary.
-        if (legacyTelegramMessage?.trim()) {
-          console.warn({ title: article.title, provider: article.provider, missingFields }, "Using legacy complete Telegram message after structured fields were incomplete");
-          return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage: legacyTelegramMessage.trim() };
-        }
-        const fallbackTime = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", hour12: false }).format(article.publishedAt);
-        const fallbackMessage = [
-          `<b>${fallbackTime} WIB | Level Dampak: 3 | BREAKING/UNVERIFIED</b>`,
-          `<b>${escapeHtml(article.title)}</b>`,
-          "",
-          `<b>Ringkasan:</b> ${escapeHtml(article.summary)}`,
-          "",
-          "<b>Bias Dampak:</b> USD Belum terkonfirmasi | Emas Belum terkonfirmasi",
-          "",
-          "<b>Alasan Analis:</b> Headline ini lolos sebagai katalis material untuk USD dan emas. Detail dampak arahnya belum bisa dipastikan karena respons analisis terstruktur tidak lengkap; fakta headline tetap dikirim agar tidak terlewat.",
-          "",
-          "<b>Kesimpulan:</b> Arah bersih belum terkonfirmasi dari data yang tersedia."
-        ].join("\n");
-        console.warn({ title: article.title, provider: article.provider, missingFields }, "Publishing neutral fallback after structured fields were incomplete");
-        return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage: fallbackMessage };
+      const { judul, ringkasan, dampakEmas } = decision;
+      if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) {
+        return { material: true, confidence: decision.confidence, reason: `${decision.reason}; Indonesian NEWS formatting incomplete`, telegramMessage: null };
       }
-      // Formatting follows a separate materiality decision; an impact label
-      // never overrides the new-and-material publication gate.
-      const telegramMessage = buildTelegramMessage({ waktuWIB, levelDampak, statusTag, judul, ringkasan, biasUsd, biasXau, alasanAnalis, catatanAksi });
+      const telegramMessage = buildTelegramMessage({ judul, ringkasan, dampakEmas });
       return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage };
     }
     return { material: false, confidence: decision.confidence, reason: decision.reason, telegramMessage: null };

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 
-export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "SHADOW" | "ROUTING" | "SENT";
+export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
   id: string; article: NewsArticle; event: EventAssessment; stage: DecisionStage;
   primaryDecision: "SEND" | "DROP" | "REVIEW"; reason: string;

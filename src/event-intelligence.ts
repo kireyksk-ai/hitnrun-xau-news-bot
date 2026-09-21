@@ -114,12 +114,4 @@ export function shouldReview(event: EventAssessment, prior?: StoryState): boolea
   if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
   return event.highPriority || event.importance >= 65;
 }
-export function highPriorityFallback(article: NewsArticle, event: EventAssessment): string {
-  const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const ageMinutes = Math.round((Date.now() - article.publishedAt.getTime()) / 60000);
-  const age = ageMinutes > 60 ? ` (terbit ${ageMinutes} menit lalu)` : "";
-  return [`⚠️ <b>${escape(article.title)}</b>`, `<b>${event.changeType}${age}</b>`,
-    escape(article.summary || "Detail tambahan belum tersedia."),
-    `Jalur relevansi: ${escape(event.causalChannel ?? "tidak teridentifikasi")}. Arah XAU belum jelas dari fakta yang tersedia.`].join("\n\n");
-}
 

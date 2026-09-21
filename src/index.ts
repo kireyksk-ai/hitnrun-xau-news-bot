@@ -4,6 +4,7 @@ import { Editor } from "./editor.js";
 import { IntelligenceStore } from "./intelligence-store.js";
 import { processArticle } from "./pipeline.js";
 import { marketSnapshot } from "./market-snapshot.js";
+import { validateNewsOutput } from "./news-output.js";
 import { GoogleNewsRssProvider } from "./providers/google-news-rss.js";
 import { GNewsDailyLimitError, GNewsProvider } from "./providers/gnews.js";
 import { MarketauxDailyLimitError, MarketauxProvider } from "./providers/marketaux.js";
@@ -49,7 +50,9 @@ function aiAllowed(): boolean {
   if (aiCount >= config.MAX_AI_ARTICLES_PER_DAY * 2) return false;
   aiCount++; return true;
 }
-async function deliver(message: string, id: string): Promise<Record<string, number>> {
+async function deliver(message: string, id: string, article: import("./types.js").NewsArticle): Promise<Record<string, number>> {
+  const outputCheck = validateNewsOutput(message, article);
+  if (!outputCheck.ok) throw new Error(`NEWS output gate rejected ${id}: ${outputCheck.reason}`);
   if (store.safeMode) return {};
   const withinHour = recentSendTimes.filter((time) => Date.now() - time < 3600000);
   recentSendTimes.length = 0; recentSendTimes.push(...withinHour);
@@ -72,7 +75,7 @@ async function replayQueued(): Promise<number> {
   for (const record of store.records().filter((r) => r.stage === "ROUTING" && r.primaryDecision === "REVIEW")) {
     const message = record.renderedMessage;
     if (!message) continue;
-    const ids = await deliver(message, record.id);
+    const ids = await deliver(message, record.id, record.article);
     if (!Object.keys(ids).length) continue;
     store.record({ ...record, stage: "SENT", primaryDecision: "SEND", sentAt: new Date().toISOString(), telegramMessageIds: ids });
     store.rememberStory(record.event, true); store.increment("alertsSent"); count++;

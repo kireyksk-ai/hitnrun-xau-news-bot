@@ -1,6 +1,7 @@
 import type { NewsArticle, EditorialDecision } from "./types.js";
-import { assessEvent, highPriorityFallback, shouldReview } from "./event-intelligence.js";
+import { assessEvent, shouldReview } from "./event-intelligence.js";
 import type { EventAssessment } from "./event-intelligence.js";
+import { validateNewsOutput } from "./news-output.js";
 import { IntelligenceStore } from "./intelligence-store.js";
 import type { ReviewRecord } from "./intelligence-store.js";
 
@@ -8,7 +9,7 @@ export type PipelineDeps = {
   store: IntelligenceStore;
   analyze: (article: NewsArticle, event: EventAssessment) => Promise<EditorialDecision>;
   shadow: (article: NewsArticle, event: EventAssessment) => Promise<{ material: boolean; score: number; reason: string }>;
-  deliver: (message: string, id: string) => Promise<Record<string, number>>;
+  deliver: (message: string, id: string, article: NewsArticle) => Promise<Record<string, number>>;
   snapshot?: () => Promise<string | null>;
   now?: () => Date;
 };
@@ -68,22 +69,34 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.increment("lowValueRejected");
     return record;
   }
-  const message = primary?.material && primary.telegramMessage ? primary.telegramMessage : highPriorityFallback(article, event);
+  const message = primary?.material ? primary.telegramMessage : null;
+  if (message === null) {
+    record = { ...record, stage: "FORMAT", primaryDecision: "REVIEW", reason: "AI produced no Indonesian NEWS narrative" };
+    deps.store.record(record);
+    return record;
+  }
+  const outputCheck = validateNewsOutput(message, article);
+  if (!outputCheck.ok) {
+    record = { ...record, stage: "FORMAT", primaryDecision: "REVIEW", reason: outputCheck.reason };
+    deps.store.record(record);
+    return record;
+  }
+  const newsMessage = message;
   // A second hard guard immediately before Telegram routing, independent of AI.
   if (deps.store.hasDeliveredIdentity(article, event.key)) {
     deps.store.increment("duplicatesRemoved");
     return { ...record, stage: "DUPLICATE", primaryDecision: "DROP", reason: "Already delivered" };
   }
   if (deps.store.safeMode) {
-    record = { ...record, stage: "ROUTING", primaryDecision: "REVIEW", reason: "Safe mode: queued for replay", renderedMessage: message };
+    record = { ...record, stage: "ROUTING", primaryDecision: "REVIEW", reason: "Safe mode: queued for replay", renderedMessage: newsMessage };
     deps.store.record(record); return record;
   }
   try {
-    const ids = await deps.deliver(message, event.key);
+    const ids = await deps.deliver(newsMessage, event.key, article);
     const delivered = Object.keys(ids).length > 0;
     record = { ...record, stage: delivered ? "SENT" : "ROUTING", primaryDecision: delivered ? "SEND" : "REVIEW",
       reason: delivered ? record.reason : "No Telegram destination accepted message",
-      sentAt: delivered ? (deps.now?.() ?? new Date()).toISOString() : undefined, telegramMessageIds: ids, renderedMessage: message };
+      sentAt: delivered ? (deps.now?.() ?? new Date()).toISOString() : undefined, telegramMessageIds: ids, renderedMessage: newsMessage };
     deps.store.record(record);
     if (delivered) {
       deps.store.markProcessedIdentity(article, event.key);
@@ -94,7 +107,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     }
     return record;
   } catch {
-    record = { ...record, stage: "ROUTING", primaryDecision: "REVIEW", reason: "Telegram delivery failed; queued for replay", renderedMessage: message };
+    record = { ...record, stage: "ROUTING", primaryDecision: "REVIEW", reason: "Telegram delivery failed; queued for replay", renderedMessage: newsMessage };
     deps.store.record(record); return record;
   }
 }

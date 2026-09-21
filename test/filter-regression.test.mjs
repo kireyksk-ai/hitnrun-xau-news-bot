@@ -69,7 +69,7 @@ test("70-case production pipeline confusion matrix", async () => {
     const article = { provider: "regression", providerId: `case-${index}`, title: item.title, summary: item.title,
       url: `https://example.test/${index}`, sourceName: "Reuters", publishedAt: new Date("2026-09-22T00:00:00Z") };
     const result = await processArticle(article, { store,
-      analyze: async () => ({ material: true, confidence: "high", reason: "adversarial AI", telegramMessage: "test" }),
+      analyze: async () => ({ material: true, confidence: "high", reason: "adversarial AI", telegramMessage: "<b>⚠️ PERUBAHAN KEBIJAKAN MATERIAL</b>\n\nAda perkembangan baru yang dapat mengubah ekspektasi pasar terhadap kebijakan ekonomi dan risiko global. Fakta ini dinilai cukup material untuk diteruskan sebagai informasi trader.\n\nBuat emas, jalurnya berjalan melalui perubahan ekspektasi kebijakan, yield, dolar, atau premi risiko. Arah emas belum jelas sampai dampak awal terlihat lebih konsisten." }),
       shadow: async () => ({ material: true, score: 90, reason: "adversarial shadow" }),
       deliver: async () => ({ chat: 1 }), now: () => new Date("2026-09-22T00:01:00Z") });
     const actual = result.stage === "SENT";
