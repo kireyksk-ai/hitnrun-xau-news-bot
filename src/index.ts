@@ -18,7 +18,10 @@ import type { NewsProvider } from "./types.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
-    ...(config.GNEWS_API_KEY ? [new GNewsProvider(config.GNEWS_API_KEY, config.GNEWS_POLL_INTERVAL_SECONDS)] : (config.GOOGLE_NEWS_RSS_ENABLED ? [new GoogleNewsRssProvider()] : [])),
+    ...(config.GNEWS_API_KEY ? [new GNewsProvider(config.GNEWS_API_KEY, config.GNEWS_POLL_INTERVAL_SECONDS)] : []),
+    // Keep Reuters/major-wire discovery active even when GNews is configured:
+    // it catches breaking oil, sanctions, Fed and war headlines that GNews can miss.
+    ...(config.GOOGLE_NEWS_RSS_ENABLED ? [new GoogleNewsRssProvider()] : []),
     ...(config.MARKETAUX_API_KEY ? [new MarketauxProvider(config.MARKETAUX_API_KEY, config.MARKETAUX_POLL_SECONDS)] : []),
     ...(config.OFFICIAL_MACRO_RSS_ENABLED ? [new OfficialMacroRssProvider(config.OFFICIAL_MACRO_RSS_POLL_SECONDS)] : []),
     ...(config.TRUTH_SOCIAL_ENABLED ? [new TruthSocialTrumpProvider(Math.max(120, config.TRUTH_SOCIAL_POLL_SECONDS))] : []),
