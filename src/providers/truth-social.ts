@@ -48,6 +48,8 @@ export class TruthSocialTrumpProvider implements NewsProvider {
       articles.push({
         provider: this.name,
         providerId,
+        postId: providerId,
+        author: "Donald Trump",
         title: "Donald Trump — Truth Social",
         summary: text,
         url,
@@ -59,3 +61,4 @@ export class TruthSocialTrumpProvider implements NewsProvider {
     return articles;
   }
 }
+

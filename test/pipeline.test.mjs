@@ -57,3 +57,23 @@ test("safe mode queues the exact message for replay", async () => {
   assert.equal(result.stage, "ROUTING"); assert.equal(result.renderedMessage, "⚠️ Perubahan baru"); assert.equal(deliveries.length, 0);
 });
 
+test("identical Trump post is deduped before a second AI call", async () => {
+  const { deps, deliveries, article } = setup({ material: true, reason: "new", telegramMessage: "send" }, { material: true, score: 90, reason: "new" });
+  let calls = 0;
+  deps.analyze = async () => { calls++; return { material: true, reason: "new", telegramMessage: "send" }; };
+  const post = { ...article("Donald Trump — Truth Social", "Trump announces new tariffs on Chinese imports"),
+    provider: "truth-social-trump", providerId: "12345", postId: "12345", author: "Donald Trump", url: "https://truthsocial.com/@realDonaldTrump/posts/12345" };
+  const first = await processArticle(post, deps);
+  const second = await processArticle({ ...post, providerId: "mirror-12345" }, deps);
+  assert.equal(first.stage, "SENT"); assert.equal(second.primaryDecision, "DROP");
+  assert.equal(calls, 1); assert.equal(deliveries.length, 1);
+});
+
+test("same storyline reversal remains a separate update", async () => {
+  const { deps, deliveries, article } = setup({ material: true, reason: "new", telegramMessage: "send" }, { material: true, score: 90, reason: "new" });
+  const first = await processArticle(article("Trump says he is open to meeting Iran's president"), deps);
+  const reversal = await processArticle(article("Iran rejects proposed meeting with Trump"), deps);
+  assert.equal(first.stage, "SENT"); assert.equal(reversal.stage, "SENT");
+  assert.equal(deliveries.length, 2);
+});
+

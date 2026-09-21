@@ -6,6 +6,8 @@ export type NewsArticle = {
   url: string;
   publishedAt: Date;
   sourceName?: string;
+  author?: string;
+  postId?: string;
 };
 
 export interface NewsProvider {
@@ -20,3 +22,4 @@ export type EditorialDecision = {
   reason: string;
   telegramMessage: string | null;
 };
+

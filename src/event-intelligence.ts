@@ -8,6 +8,8 @@ export type EventAssessment = {
   key: string; storyKey: string; action: string; fact: string; entities: string[];
   changeType: ChangeType; sourceTier: SourceTier; sourceConfidence: number;
   importance: number; urgency: number; novelty: number; marketRelevance: number;
+  actorImportance: number; marketMateriality: number; magnitude: number; transmissionConfidence: number;
+  causalChannel: string | null;
   informationDelta: number; directionConfidence: number; highPriority: boolean;
   unscheduled: boolean; transmissionChannels: string[]; quotedText?: string;
   publishedAt: string; eventTime: string; firstSeenAt: string; lastUpdatedAt: string;
@@ -16,11 +18,28 @@ export type EventAssessment = {
 
 const entities = ["trump", "iran", "israel", "saudi", "hormuz", "houthi", "fed", "fomc", "treasury", "opec", "russia", "china"];
 const scheduled = /\b(cpi|pce|nfp|nonfarm payroll|gdp|ism|retail sales|jobless claims|fomc decision|treasury auction)\b/i;
-const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll)\b/i;
+const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll|gdp|retail sales|fiscal|tax)\b/i;
 const authority = /\b(trump|white house|president|fed|fomc|powell|goolsbee|waller|treasury|bessent|iran|israel|saudi|houthi|opec)\b/i;
-const materialAction = /\b(announces?|orders?|imposes?|approves?|rejects?|denies?|cancels?|withdraws?|rules out|agrees?|accepts?|offers?|open to meeting|attacks?|strikes?|launches?|ceasefire|ultimatum|disrupts?|shuts? down|reopens?|resumes?|hikes?|cuts?|raises?|vot(?:es|ed)|surges?|plunges?)\b/i;
-const materialObject = /\b(iran|hormuz|war|ceasefire|oil supply|oil exports?|energy facilities|tanker|shipping|sanctions?|tariffs?|fed|fomc|interest rates?|rates?|inflation|treasury yields?|dollar|cpi|pce|nfp|payroll|opec)\b/i;
-const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|unchanged|reiterates?|repeats?|no new details)\b/i;
+const materialAction = /\b(announces?|orders?|imposes?|approves?|rejects?|denies?|cancels?|withdraws?|rules out|agrees?|accepts?|offers?|open to meeting|attacks?|strikes?|launches?|threatens?|threat|blocks?|declares?|signals?|ceasefire|ultimatum|disrupts?|disrupted|shuts? down|reopens?|resumes?|hikes?|cuts?|raises?|releases?|vot(?:es|ed)|surges?|plunges?|revis(?:es|ed))\b/i;
+const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|unchanged|reiterates?|repeats?|no new details|without new policy|without a policy change|without announcing policy)\b/i;
+const mediaOrPersonal = /\b(cnn|politico|msnbc|journalists?|press access|media seating|news media|polling|television ratings?|anchor|newspaper|campaign volunteer|birthday|award|sports champion|charity gala|social media followers?|judge over personal|court scheduling)\b/i;
+const macro = /\b(cpi|pce|nfp|payroll|unemployment|retail sales|gdp|ism|jobless claims|inflation data)\b/i;
+const surprise = /\b(above consensus|below consensus|surprise|sharply|revised|revision|plunges?|surges?|shock|higher than forecast|lower than forecast)\b/i;
+const rates = /\b(fed|fomc|interest rates?|rate cuts?|rate hikes?|treasury|yields?|dollar|dxy|debt|deficit|fiscal|tax policy|stimulus|balance sheet|reserves?)\b/i;
+const geo = /\b(iran|israel|russia|ukraine|china|hormuz|houthi|war|ceasefire|military|missile|peace talks?)\b/i;
+const energy = /\b(oil|crude|brent|wti|tanker|shipping|opec|energy facilit|export terminal|strategic oil reserves?|oil reserves?)\b/i;
+const trade = /\b(tariffs?|sanctions?|trade agreement|trade policy|export controls?)\b/i;
+function causalChannel(text: string): string | null {
+  if (minorOrCommentary.test(text)) return null;
+  // A media/personal grievance remains non-market even if it mentions Iran or Fed.
+  if (mediaOrPersonal.test(text) && !/\b(announces?|orders?|imposes?|approves?|cancels?|withdraws?|cuts?|hikes?)\b.{0,90}\b(tariffs?|sanctions?|rates?|oil|iran policy|fed policy|tax policy)\b/i.test(text)) return null;
+  if (macro.test(text) && surprise.test(text)) return "DATA → FED_EXPECTATIONS → YIELDS/USD → XAU";
+  if (trade.test(text) && materialAction.test(text)) return "TRADE/SANCTIONS → INFLATION/GROWTH → FED/USD → XAU";
+  if (energy.test(text) && materialAction.test(text)) return "OIL_SUPPLY → INFLATION/RISK → YIELDS/USD → XAU";
+  if (geo.test(text) && materialAction.test(text)) return "GEOPOLITICAL_CHANGE → OIL/RISK → INFLATION/USD → XAU";
+  if (rates.test(text) && materialAction.test(text)) return "POLICY/RATES → YIELDS → DXY → XAU";
+  return null;
+}
 const actionTerms = /\b(rejects?|denies?|cancels?|rules out|agrees?|accepts?|meets?|meeting|talks?|negotiat\w*|attacks?|strikes?|missiles?|ceasefires?|imposes?|sanctions?|cuts?|hikes?|holds?|raises?|announces?|confirms?|disrupt\w*|shuts?|reopens?|resumes?)\b/gi;
 
 export function sourceTier(article: NewsArticle): SourceTier {
@@ -63,30 +82,35 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   const novelty = !hasNewFact ? 0 : prior ? informationDelta : 90;
   const marketRelevance = relevant.test(text) ? 80 : 10;
   const sourceConfidence = tier === 1 ? 95 : tier === 2 ? 80 : 45;
-  const hasMaterialAction = materialAction.test(text);
-  const hasMaterialObject = materialObject.test(text);
-  const highPriority = tier <= 2 && authority.test(text) && hasMaterialAction && hasMaterialObject && !minorOrCommentary.test(text);
+  const channel = causalChannel(text);
+  const actorImportance = authority.test(text) ? 90 : 40;
+  const marketMateriality = channel ? 85 : 0;
+  const magnitude = channel ? (/\b(major|surprise|sharply|shutdown|strike|attack|ceasefire|sanctions?|tariffs?)\b/i.test(text) ? 90 : 75) : 0;
+  const transmissionConfidence = channel ? 85 : 0;
+  const highPriority = tier <= 2 && channel !== null && (authority.test(text) || macro.test(text));
   const unscheduled = !scheduled.test(text);
-  const materiality = hasMaterialAction && hasMaterialObject ? 85 : hasMaterialObject ? 45 : 10;
-  const importance = Math.min(100, Math.round(sourceConfidence * 0.15 + novelty * 0.15 + marketRelevance * 0.15 + informationDelta * 0.15 + materiality * 0.4 + (highPriority ? 8 : 0) - (minorOrCommentary.test(text) ? 35 : 0)));
+  // Actor authority is recorded separately; it contributes nothing to importance.
+  const importance = Math.min(100, Math.round(marketMateriality * 0.55 + novelty * 0.25 + magnitude * 0.20));
   const urgency = Math.min(100, importance + (unscheduled ? 15 : 0) + (reversal ? 15 : 0));
   const transmissionChannels: string[] = [];
   if (/iran|hormuz|saudi|houthi|oil|crude|tanker|opec/i.test(text)) transmissionChannels.push("OIL_SUPPLY", "INFLATION_EXPECTATIONS");
   if (/fed|fomc|cpi|pce|nfp|payroll|inflation|rate/i.test(text)) transmissionChannels.push("FED_PATH", "TREASURY_YIELDS", "DXY");
   if (/war|attack|missile|ceasefire|meeting|negotiat|sanction/i.test(text)) transmissionChannels.push("GEOPOLITICAL_RISK");
   if (/treasury|yield/i.test(text)) transmissionChannels.push("TREASURY_YIELDS", "DXY");
-  transmissionChannels.push("XAU");
+  if (channel) transmissionChannels.push("XAU");
   const quotedText = text.match(/[“"]([^”"]{5,250})[”"]/)?.[1];
-  const reasons = [`source tier ${tier}`, `change ${changeType}`, `delta ${informationDelta}`];
+  const reasons = [`source tier ${tier}`, `change ${changeType}`, `delta ${informationDelta}`, channel ?? "no concrete XAU transmission"];
   if (reversal) reasons.push("reversal of prior story");
   return { key, storyKey, action, fact, entities: namedEntities, changeType, sourceTier: tier, sourceConfidence,
-    importance, urgency, novelty, marketRelevance, informationDelta, directionConfidence: 0, highPriority,
+    importance, urgency, novelty, marketRelevance, actorImportance, marketMateriality, magnitude, transmissionConfidence, causalChannel: channel,
+    informationDelta, directionConfidence: 0, highPriority,
     unscheduled, transmissionChannels: [...new Set(transmissionChannels)], quotedText,
     publishedAt: article.publishedAt.toISOString(), eventTime: article.publishedAt.toISOString(),
     firstSeenAt: seenAt.toISOString(), lastUpdatedAt: seenAt.toISOString(), reasons };
 }
 export function shouldReview(event: EventAssessment, prior?: StoryState): boolean {
   if (event.informationDelta === 0) return false;
+  if (!event.causalChannel || event.marketMateriality < 65 || event.transmissionConfidence < 65) return false;
   if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
   return event.highPriority || event.importance >= 65;
 }
@@ -96,6 +120,6 @@ export function highPriorityFallback(article: NewsArticle, event: EventAssessmen
   const age = ageMinutes > 60 ? ` (terbit ${ageMinutes} menit lalu)` : "";
   return [`⚠️ <b>${escape(article.title)}</b>`, `<b>${event.changeType}${age}</b>`,
     escape(article.summary || "Detail tambahan belum tersedia."),
-    "Perubahan ini bisa memengaruhi risk premium, oil atau ekspektasi rate; dampak akhir ke emas masih dua arah sampai jalur inflasi, yield dan dolar jelas."].join("\n\n");
+    `Jalur relevansi: ${escape(event.causalChannel ?? "tidak teridentifikasi")}. Arah XAU belum jelas dari fakta yang tersedia.`].join("\n\n");
 }
 

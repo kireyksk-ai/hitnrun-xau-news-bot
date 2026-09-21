@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 
@@ -20,7 +21,17 @@ const emptyMetrics = (): Metrics => ({ ingested: 0, uniqueEvents: 0, alertsSent:
   lowValueRejected: 0, unverifiedRejected: 0, highRiskMisses: 0, providerFailures: 0, aiFailures: 0,
   latencyTotalMs: 0, latencyCount: 0, providerLatencyMs: {} });
 type Data = { records: Record<string, ReviewRecord>; stories: Record<string, StoryState>; metrics: Record<string, Metrics>;
+  processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
   safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string };
+
+function identityKeys(article: NewsArticle): string[] {
+  const source = (article.sourceName || article.provider).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const author = (article.author || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const identity = article.postId || article.providerId || article.url;
+  const content = `${article.title} ${article.summary}`.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  return [digest(`id|${source}|${author}|${identity}|${digest(content)}`), digest(`content|${source}|${author}|${content}`)];
+}
 
 export class IntelligenceStore {
   private data: Data;
@@ -43,6 +54,20 @@ export class IntelligenceStore {
     const metrics = this.counters(); metrics.latencyTotalMs += milliseconds; metrics.latencyCount++; this.save();
   }
   getRecord(id: string): ReviewRecord | undefined { return this.data.records[id]; }
+  hasProcessedIdentity(article: NewsArticle): boolean { return identityKeys(article).some((key) => Boolean(this.data.processedIdentities?.[key])); }
+  markProcessedIdentity(article: NewsArticle, eventKey: string): void {
+    this.data.processedIdentities ??= {}; for (const key of identityKeys(article)) this.data.processedIdentities[key] = eventKey; this.save();
+  }
+  hasDeliveredIdentity(article: NewsArticle, eventKey: string): boolean {
+    return Boolean(this.data.deliveredIdentities?.[`event:${eventKey}`]) ||
+      identityKeys(article).some((key) => Boolean(this.data.deliveredIdentities?.[key]));
+  }
+  markDeliveredIdentity(article: NewsArticle, eventKey: string): void {
+    this.data.deliveredIdentities ??= {};
+    this.data.deliveredIdentities[`event:${eventKey}`] = new Date().toISOString();
+    for (const key of identityKeys(article)) this.data.deliveredIdentities[key] = new Date().toISOString();
+    this.save();
+  }
   records(): ReviewRecord[] { return Object.values(this.data.records); }
   record(item: ReviewRecord): void { this.data.records[item.id] = item; this.save(); }
   getStory(key: string): StoryState | undefined { return this.data.stories[key]; }
@@ -67,7 +92,8 @@ export class IntelligenceStore {
       url: "", publishedAt: new Date(), sourceName: source };
     const event = { key: id, storyKey: id, action: "unknown", fact: headline, entities: [],
       changeType: "NEW_INFORMATION", sourceTier: 3, sourceConfidence: 0, importance: 0, urgency: 0,
-      novelty: 0, marketRelevance: 0, informationDelta: 0, directionConfidence: 0,
+      novelty: 0, marketRelevance: 0, actorImportance: 0, marketMateriality: 0, magnitude: 0,
+      transmissionConfidence: 0, causalChannel: null, informationDelta: 0, directionConfidence: 0,
       highPriority: false, unscheduled: true, transmissionChannels: [], publishedAt: article.publishedAt.toISOString(),
       eventTime: article.publishedAt.toISOString(), firstSeenAt: new Date().toISOString(),
       lastUpdatedAt: new Date().toISOString(), reasons: ["not discovered by provider"] } satisfies EventAssessment;

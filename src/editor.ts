@@ -40,7 +40,7 @@ When material=true, write in informal but sharp Bahasa Indonesia and populate th
 - biasUsd: "Bullish" | "Bearish" | "Netral" | "Belum terkonfirmasi"; final conclusion after weighing the supplied live market snapshot
 - biasXau: "Bullish" | "Bearish" | "Netral" | "Belum terkonfirmasi"; final conclusion after weighing the supplied live market snapshot
 - alasanAnalis: the full causal chain, step by step: immediate impulse, what happens to inflation expectations/yields/DXY/liquidity/risk demand, the counterforce that could invalidate the first move, and why the stated USD/XAU bias follows; separate confirmed facts from desk inference; short paragraphs separated by a single newline if it helps readability, never bullet characters
-- catatanAksi: the already-weighed desk conclusion for the most likely XAUUSD/DXY behavior over the next 1-4 hours, its strength, and the exact condition that invalidates it. Do not tell readers to monitor, watch, check, wait for, or compare anything themselves. Never output a checklist such as "pantau DXY/US10Y/oil". If confirmation is insufficient, state directly that no directional edge is confirmed and why; no price zones and no investment advice
+- catatanAksi: concise desk conclusion supported by the event. Do NOT force a 1-4 hour price prediction. If direction is unclear, say "arah XAU belum jelas" and why. Do not tell readers to monitor, watch, check, wait for, or compare anything themselves. Never output a checklist such as "pantau DXY/US10Y/oil"; no price zones and no investment advice
 CRITICAL: fill all nine fields whenever possible. If a format field cannot be completed, still set material=true for a relevant headline; the system will safely publish the factual headline using its fallback format rather than suppress it.
 When material=false, leave all of the fields above null.
 Never mention that this is a bot or an automated message. Return JSON only.`;
@@ -71,7 +71,7 @@ function buildTelegramMessage(f: FormattableFields): string {
     "",
     `<b>Alasan Analis:</b>\n${escapeHtml(f.alasanAnalis)}`,
     "",
-    `<b>Kesimpulan 1-4 Jam:</b>\n${escapeHtml(f.catatanAksi)}`
+    `<b>Kesimpulan:</b>\n${escapeHtml(f.catatanAksi)}`
   ].join("\n");
 }
 
@@ -113,7 +113,7 @@ export class Editor {
           "",
           "<b>Alasan Analis:</b> Headline ini lolos sebagai katalis material untuk USD dan emas. Detail dampak arahnya belum bisa dipastikan karena respons analisis terstruktur tidak lengkap; fakta headline tetap dikirim agar tidak terlewat.",
           "",
-          "<b>Kesimpulan 1-4 Jam:</b> Ada risiko pergerakan meningkat, tetapi arah bersih belum terkonfirmasi dari data yang tersedia."
+          "<b>Kesimpulan:</b> Arah bersih belum terkonfirmasi dari data yang tersedia."
         ].join("\n");
         console.warn({ title: article.title, provider: article.provider, missingFields }, "Publishing neutral fallback after structured fields were incomplete");
         return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage: fallbackMessage };

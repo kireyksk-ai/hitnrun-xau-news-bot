@@ -19,9 +19,13 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   const prior = deps.store.getStory(assessEvent(article).storyKey);
   const event = assessEvent(article, prior, now);
   const previous = deps.store.getRecord(event.key);
+  if (deps.store.hasProcessedIdentity(article) || deps.store.hasDeliveredIdentity(article, event.key)) {
+    deps.store.increment("duplicatesRemoved");
+    return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "Source/author/post/content identity already processed" };
+  }
   if ((previous && !(previous.stage === "SOURCE" && event.sourceTier <= 2)) || event.informationDelta === 0) {
     deps.store.increment("duplicatesRemoved");
-    return previous ?? { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "No information delta" };
+    return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "No information delta or event already processed" };
   }
   deps.store.increment("uniqueEvents");
   let record: ReviewRecord = { id: event.key, article, event, stage: "SCORE", primaryDecision: "REVIEW",
@@ -29,7 +33,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   deps.store.record(record);
   if (!shouldReview(event, prior)) {
     record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason: "Importance/delta below threshold" };
-    deps.store.record(record); deps.store.increment("lowValueRejected"); return record;
+    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected"); return record;
   }
   let enriched = article;
   try {
@@ -51,19 +55,25 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   const corroborated = event.sourceTier <= 2;
   const aiSupports = Boolean(primary?.material || shadowSupports);
   const aiUnavailable = !primary && !shadow;
-  const publish = corroborated && (aiSupports || (event.highPriority && aiUnavailable));
+  const publish = corroborated && Boolean(event.causalChannel) && event.marketMateriality >= 65 &&
+    event.transmissionConfidence >= 65 && (aiSupports || (event.highPriority && aiUnavailable));
   record = { ...record, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
     reason: primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score };
   if (!corroborated) {
     record = { ...record, stage: "SOURCE", primaryDecision: "REVIEW", reason: "Tier-3 source needs independent corroboration" };
-    deps.store.record(record); deps.store.increment("unverifiedRejected"); return record;
+    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("unverifiedRejected"); return record;
   }
   if (!publish) {
-    deps.store.record(record);
+    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key);
     deps.store.increment("lowValueRejected");
     return record;
   }
   const message = primary?.material && primary.telegramMessage ? primary.telegramMessage : highPriorityFallback(article, event);
+  // A second hard guard immediately before Telegram routing, independent of AI.
+  if (deps.store.hasDeliveredIdentity(article, event.key)) {
+    deps.store.increment("duplicatesRemoved");
+    return { ...record, stage: "DUPLICATE", primaryDecision: "DROP", reason: "Already delivered" };
+  }
   if (deps.store.safeMode) {
     record = { ...record, stage: "ROUTING", primaryDecision: "REVIEW", reason: "Safe mode: queued for replay", renderedMessage: message };
     deps.store.record(record); return record;
@@ -76,6 +86,8 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
       sentAt: delivered ? (deps.now?.() ?? new Date()).toISOString() : undefined, telegramMessageIds: ids, renderedMessage: message };
     deps.store.record(record);
     if (delivered) {
+      deps.store.markProcessedIdentity(article, event.key);
+      deps.store.markDeliveredIdentity(article, event.key);
       deps.store.rememberStory(event, true);
       deps.store.increment("alertsSent");
       deps.store.deliveryLatency(Math.max(0, (deps.now?.() ?? new Date()).getTime() - now.getTime()));
