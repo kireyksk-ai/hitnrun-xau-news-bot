@@ -6,7 +6,7 @@ type Quote = { label: string; symbol: string };
 type SnapshotItem = { label: string; price: number; changePercent: number };
 
 const quotes: Quote[] = [
-  { label: "Emas", symbol: "XAUUSD=X" },
+  { label: "Emas", symbol: "GC=F" },
   { label: "DXY", symbol: "DX-Y.NYB" },
   { label: "US10Y", symbol: "^TNX" },
   { label: "Nasdaq", symbol: "^NDX" },
