@@ -134,3 +134,35 @@ test("macro memory keeps the release state and repeated report is rejected", asy
   assert.ok(pack.macroContext.length >= 1);
 });
 
+
+
+test("Musalem malformed Sol response is an AI contract failure, not an intelligence rejection", async () => {
+  const { AIContractFailure } = await import("../dist/editor.js");
+  const { deps, deliveries, article } = setup(null, { material: true, score: 91, reason: "Fed hike guidance is material" });
+  deps.analyze = async () => { throw new AIContractFailure(); };
+  const result = await processArticle(article("Fed's Musalem says more rate hikes likely needed to quell inflation"), deps);
+  assert.equal(result.stage, "AI_CONTRACT_FAILURE");
+  assert.equal(result.primaryDecision, "REVIEW");
+  assert.match(result.reason, /AI_CONTRACT_FAILURE/);
+  assert.equal(result.audit?.schema, "INVALID"); assert.equal(deliveries.length, 0);
+});
+
+test("Goolsbee and Hormuz incident fixtures reach the evaluator", async () => {
+  for (const title of [
+    "Fed's Goolsbee says strong demand may be adding to US inflation",
+    "Vessels trickle through Strait of Hormuz as Middle East conflict persists"
+  ]) {
+    const { deps, article } = setup({ material: false, confidence: "medium", reason: "intelligence evaluation", telegramMessage: null }, { material: false, score: 20, reason: "not new" });
+    const result = await processArticle(article(title), deps);
+    assert.ok(["AI", "SHADOW"].includes(result.stage));
+    assert.equal(result.audit?.aiCalled, true);
+  }
+});
+
+test("cross-provider wire duplicates produce one alert", async () => {
+  const { deps, deliveries, article } = setup({ material: true, confidence: "high", reason: "new supply disruption", telegramMessage: news }, { material: true, score: 90, reason: "new" });
+  const title = "Vessels trickle through Strait of Hormuz as conflict disrupts shipping";
+  const first = await processArticle({ ...article(title), provider: "newsapi-wires", providerId: "reuters-1" }, deps);
+  const second = await processArticle({ ...article(title), provider: "twitter-wire", providerId: "fj-1" }, deps);
+  assert.equal(first.stage, "SENT"); assert.equal(second.stage, "DUPLICATE"); assert.equal(deliveries.length, 1);
+});
