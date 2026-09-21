@@ -92,3 +92,45 @@ test("formatter failure is held and cannot reach NEWS", async () => {
   assert.equal(result.stage, "FORMAT"); assert.equal(result.primaryDecision, "REVIEW"); assert.equal(deliveries.length, 0);
 });
 
+test("persistent story and actor memory supplies a compact delta pack", async () => {
+  const { deps, article } = setup({ material: true, reason: "new", telegramMessage: news }, { material: true, score: 90, reason: "new" });
+  await processArticle(article("Trump announces there will be no negotiations with Iran"), deps);
+  let aiInput = "";
+  deps.analyze = async (item) => { aiInput = item.summary; return { material: true, reason: "stance changed", telegramMessage: news }; };
+  const result = await processArticle(article("Trump says he is open to meeting Iran's president"), deps);
+  assert.equal(result.stage, "SENT");
+  assert.match(aiInput, /MARKET_CONTEXT_PACK/);
+  assert.match(aiInput, /no negotiations with iran/);
+  assert.match(aiInput, /actorStances/);
+});
+
+test("persistent alert memory survives a store restart and blocks repeat", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "xau-memory-restart-"));
+  const path = join(directory, "state.json");
+  const store = new IntelligenceStore(path);
+  const item = { provider: "test", providerId: "restart-1", title: "Trump says he is open to meeting Iran's president", summary: "", url: "https://example.test/restart", publishedAt: new Date("2026-09-22T00:00:00Z"), sourceName: "Reuters" };
+  const primary = { material: true, reason: "new", telegramMessage: news };
+  const deps = { store, analyze: async () => primary, shadow: async () => ({ material: true, score: 90, reason: "new" }), deliver: async () => ({ chat: 1 }) };
+  assert.equal((await processArticle(item, deps)).stage, "SENT");
+  const restarted = new IntelligenceStore(path);
+  const repeat = await processArticle({ ...item, provider: "mirror", providerId: "restart-2" }, { ...deps, store: restarted });
+  assert.equal(repeat.stage, "DUPLICATE");
+});
+
+test("Fed repeated stance is not a material delta, while a pivot is", async () => {
+  const { deps, article } = setup({ material: true, reason: "new", telegramMessage: news }, { material: true, score: 90, reason: "new" });
+  const first = await processArticle(article("Fed official Goolsbee says inflation remains too high for rate cuts"), deps);
+  const repeated = await processArticle(article("Fed official Goolsbee says inflation remains too high for rate cuts", "Same view repeated"), deps);
+  const pivot = await processArticle(article("Fed official Goolsbee says inflation progress could allow rate cuts"), deps);
+  assert.equal(first.stage, "SENT"); assert.notEqual(repeated.stage, "SENT"); assert.equal(pivot.stage, "SENT");
+});
+
+test("macro memory keeps the release state and repeated report is rejected", async () => {
+  const { deps, article } = setup({ material: true, reason: "surprise", telegramMessage: news }, { material: true, score: 90, reason: "new" });
+  const first = await processArticle(article("US CPI below consensus at 3.5%", "Consensus 3.7%, previous 3.8%"), deps);
+  const repeat = await processArticle(article("Inflation remains 3.5%", "CPI remains 3.5%"), deps);
+  assert.equal(first.stage, "SENT"); assert.notEqual(repeat.stage, "SENT");
+  const pack = deps.store.marketContext(first.event, first.article);
+  assert.ok(pack.macroContext.length >= 1);
+});
+

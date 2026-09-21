@@ -21,7 +21,7 @@ const scheduled = /\b(cpi|pce|nfp|nonfarm payroll|gdp|ism|retail sales|jobless c
 const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll|gdp|retail sales|fiscal|tax)\b/i;
 const authority = /\b(trump|white house|president|fed|fomc|powell|goolsbee|waller|treasury|bessent|iran|israel|saudi|houthi|opec)\b/i;
 const materialAction = /\b(announces?|orders?|imposes?|approves?|rejects?|denies?|cancels?|withdraws?|rules out|agrees?|accepts?|offers?|open to meeting|attacks?|strikes?|launches?|threatens?|threat|blocks?|declares?|signals?|ceasefire|ultimatum|disrupts?|disrupted|shuts? down|reopens?|resumes?|hikes?|cuts?|raises?|releases?|vot(?:es|ed)|surges?|plunges?|revis(?:es|ed))\b/i;
-const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|unchanged|reiterates?|repeats?|no new details|without new policy|without a policy change|without announcing policy)\b/i;
+const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|unchanged|reiterat(?:e|es|ed|ing)|repeat(?:s|ed|ing)?|no new details|without new policy|without a policy change|without announcing policy)\b/i;
 const mediaOrPersonal = /\b(cnn|politico|msnbc|journalists?|press access|media seating|news media|polling|television ratings?|anchor|newspaper|campaign volunteer|birthday|award|sports champion|charity gala|social media followers?|judge over personal|court scheduling)\b/i;
 const macro = /\b(cpi|pce|nfp|payroll|unemployment|retail sales|gdp|ism|jobless claims|inflation data)\b/i;
 const surprise = /\b(above consensus|below consensus|surprise|sharply|revised|revision|plunges?|surges?|shock|higher than forecast|lower than forecast)\b/i;
@@ -41,6 +41,8 @@ function causalChannel(text: string): string | null {
   return null;
 }
 const actionTerms = /\b(rejects?|denies?|cancels?|rules out|agrees?|accepts?|meets?|meeting|talks?|negotiat\w*|attacks?|strikes?|missiles?|ceasefires?|imposes?|sanctions?|cuts?|hikes?|holds?|raises?|announces?|confirms?|disrupt\w*|shuts?|reopens?|resumes?)\b/gi;
+const restrictiveStance = /\b(inflation (?:is |remains )?too high|no (?:rate )?cuts?|hikes?|higher for longer|tighten(?:ing)?|hawkish)\b/i;
+const easingStance = /\b(rate cuts?|eas(?:e|ing)|disinflation|inflation progress|allow (?:for )?(?:rate )?cuts?|dovish)\b/i;
 
 export function sourceTier(article: NewsArticle): SourceTier {
   const source = `${article.sourceName ?? ""} ${article.provider}`.toLowerCase();
@@ -78,7 +80,12 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   const key = createHash("sha256").update(`${storyKey}|${action}|${fact.slice(0, 180)}`).digest("hex");
   const hasNewFact = !prior || prior.lastFact !== fact;
   const reversal = Boolean(prior && ((changeType === "DENIAL" && prior.lastChange !== "DENIAL") || (prior.lastChange === "DENIAL" && changeType !== "DENIAL")));
-  const informationDelta = !hasNewFact ? 0 : reversal ? 100 : prior?.lastAction === action ? 45 : 80;
+  // A policy/stance pivot is a material delta even when the generic action word
+  // (for example "says") is unchanged. This is deliberately semantic-light and
+  // deterministic; the AI still decides materiality after receiving the state.
+  const stanceShift = Boolean(prior && ((restrictiveStance.test(prior.lastFact) && easingStance.test(text)) ||
+    (easingStance.test(prior.lastFact) && restrictiveStance.test(text))));
+  const informationDelta = !hasNewFact ? 0 : reversal ? 100 : stanceShift ? 85 : prior?.lastAction === action ? 45 : 80;
   const novelty = !hasNewFact ? 0 : prior ? informationDelta : 90;
   const marketRelevance = relevant.test(text) ? 80 : 10;
   const sourceConfidence = tier === 1 ? 95 : tier === 2 ? 80 : 45;
@@ -101,6 +108,7 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   const quotedText = text.match(/[“"]([^”"]{5,250})[”"]/)?.[1];
   const reasons = [`source tier ${tier}`, `change ${changeType}`, `delta ${informationDelta}`, channel ?? "no concrete XAU transmission"];
   if (reversal) reasons.push("reversal of prior story");
+  if (stanceShift) reasons.push("material actor stance change");
   return { key, storyKey, action, fact, entities: namedEntities, changeType, sourceTier: tier, sourceConfidence,
     importance, urgency, novelty, marketRelevance, actorImportance, marketMateriality, magnitude, transmissionConfidence, causalChannel: channel,
     informationDelta, directionConfidence: 0, highPriority,

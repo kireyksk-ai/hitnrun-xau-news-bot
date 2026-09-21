@@ -34,15 +34,18 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   deps.store.record(record);
   if (!shouldReview(event, prior)) {
     record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason: "Importance/delta below threshold" };
+    deps.store.observeMarketEvent(article, event);
     deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected"); return record;
   }
   let enriched = article;
   try {
     const market = await deps.snapshot?.();
-    const context = { event, prior, market: market ?? "unavailable",
-      instruction: "State what changed, first-order and second-order effects, counterfactual novelty, source uncertainty and whether the market confirms or resists the event. Do not infer direction from the candle alone." };
-    enriched = { ...article, summary: `${article.summary}\n\nMARKET_INTELLIGENCE_CONTEXT: ${JSON.stringify(context)}` };
+    const context = deps.store.marketContext(event, article, market);
+    enriched = { ...article, summary: `${article.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}` };
   } catch { /* Snapshot is context only and never blocks an event. */ }
+  // Persist after building the context pack: the model sees the state that
+  // existed immediately before this candidate, not a state overwritten by it.
+  deps.store.observeMarketEvent(article, event);
 
   let primary: EditorialDecision | undefined;
   let shadow: { material: boolean; score: number; reason: string } | undefined;
