@@ -24,9 +24,9 @@ import type { NewsArticle, NewsProvider } from "../types.js";
 // No documented hard rate limit as of writing; default poll is 30s to stay well
 // clear of anything reasonable for a $99/mo individual plan. Raise
 // BENZINGA_POLL_SECONDS if Benzinga ever pushes back with 429s.
-const TOPICS = ["gold", "XAUUSD", "DXY", "Bullion", "Safe haven", "Federal Reserve", "FOMC", "Powell", "Warsh", "Waller", "Bowman", "Barr", "Cook", "Jefferson", "Williams", "Daly", "Bostic", "Goolsbee", "Logan", "Musalem", "Schmid", "Collins", "Hammack", "Kashkari", "CPI", "PCE", "NFP", "PPI", "GDP", "Treasury yields", "Treasury", "Bessent", "tariffs", "ECB", "BOE", "BOJ", "PBOC", "China", "Taiwan", "war", "Iran", "Israel", "Russia", "oil", "WTI", "Brent", "Crude Oil", "OPEC", "sanctions", "Houthi", "missile", "strike", "Trump", "Vance", "Lutnick", "Hassett", "Navarro", "Miran", "Lagarde", "Bailey", "Ueda", "Putin", "Zelenskiy", "central bank gold buying", "gold reserves", "World Gold Council", "gold demand", "gold ETF", "GLD", "COMEX gold", "gold futures positioning", "CFTC gold positioning", "de-dollarization", "gold supply", "gold premium"].join(",");type BenzingaArticle = {
-    type BenzingaArticle = {
-        id?: number | string;
+const TOPICS = ["gold", "XAUUSD", "DXY", "Bullion", "Safe haven", "Federal Reserve", "FOMC", "Powell", "Warsh", "Waller", "Bowman", "Barr", "Cook", "Jefferson", "Williams", "Daly", "Bostic", "Goolsbee", "Logan", "Musalem", "Schmid", "Collins", "Hammack", "Kashkari", "CPI", "PCE", "NFP", "PPI", "GDP", "Treasury yields", "Treasury", "Bessent", "tariffs", "ECB", "BOE", "BOJ", "PBOC", "China", "Taiwan", "war", "Iran", "Israel", "Russia", "oil", "WTI", "Brent", "Crude Oil", "OPEC", "sanctions", "Houthi", "missile", "strike", "Trump", "Vance", "Lutnick", "Hassett", "Navarro", "Miran", "Lagarde", "Bailey", "Ueda", "Putin", "Zelenskiy", "central bank gold buying", "gold reserves", "World Gold Council", "gold demand", "gold ETF", "GLD", "COMEX gold", "gold futures positioning", "CFTC gold positioning", "de-dollarization", "gold supply", "gold premium"].join(",");
+type BenzingaArticle = {
+            id?: number | string;
     created?: string;
     title?: string;
     teaser?: string;
