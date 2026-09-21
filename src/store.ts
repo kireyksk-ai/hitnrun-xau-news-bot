@@ -18,9 +18,19 @@ export class Store {
   has(article: NewsArticle): boolean {
     return Boolean(this.entries[this.fingerprint(article)]);
   }
+  hasEvent(eventKey: string): boolean {
+    return Boolean(this.entries[this.eventFingerprint(eventKey)]);
+  }
   remember(article: NewsArticle, posted: boolean): void {
     this.entries[this.fingerprint(article)] = { seenAt: new Date().toISOString(), posted };
     this.persist();
+  }
+  rememberEvent(eventKey: string, posted: boolean): void {
+    this.entries[this.eventFingerprint(eventKey)] = { seenAt: new Date().toISOString(), posted };
+    this.persist();
+  }
+  private eventFingerprint(eventKey: string): string {
+    return `event:${createHash("sha256").update(eventKey).digest("hex")}`;
   }
   purge(days = 14): void {
     const cutoff = Date.now() - days * 86400000;
