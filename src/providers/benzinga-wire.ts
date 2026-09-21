@@ -1,4 +1,7 @@
+import pino from "pino";
 import type { NewsArticle, NewsProvider } from "../types.js";
+
+const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
 // Benzinga News API -- the closest thing to a real prop-desk newswire this repo can
 // reach programmatically. Benzinga Pro (the $37-197/mo terminal with audio "squawk")
@@ -35,6 +38,15 @@ import type { NewsArticle, NewsProvider } from "../types.js";
 // provider in this repo -- this keyword gate only exists to stop a high-volume general
 // wire from burning through MAX_AI_ARTICLES_PER_DAY on stock-earnings noise.
 //
+// A previous version of this file was silent on every poll unless something failed or
+// an article was material enough to send to Telegram -- that made it impossible to
+// tell, from Render logs alone, whether Benzinga was succeeding-but-filtering-out
+// everything, or the request was hanging with no timeout. Fixed below: every poll now
+// logs a one-line summary (fetched vs matched count), and the fetch has a 15s
+// AbortSignal timeout (same pattern already used in google-news-rss.ts) so a stalled
+// request surfaces as a normal "Provider polling failed" error instead of hanging
+// silently past the 30s poll interval.
+//
 // Requires BENZINGA_API_KEY. Disabled (skipped, not thrown) when absent, same pattern
 // as every other optional provider in this repo -- this layer never takes down the
 // rest of the pipeline.
@@ -46,47 +58,50 @@ const TOPICS = ["gold", "XAUUSD", "DXY", "Bullion", "Safe haven", "Federal Reser
 const TOPICS_LOWER = TOPICS.map((topic) => topic.toLowerCase());
 
 type BenzingaArticle = {
-                benzinga_id?: number | string;
-                published?: string;
-                title?: string;
-                teaser?: string;
-                body?: string;
-                url?: string;
+      benzinga_id?: number | string;
+      published?: string;
+      title?: string;
+      teaser?: string;
+      body?: string;
+      url?: string;
 };
 
 export class BenzingaWireProvider implements NewsProvider {
-                readonly name = "benzinga";
+      readonly name = "benzinga";
 
-  constructor(private readonly apiKey: string, readonly pollIntervalSeconds = 30) {}
+    constructor(private readonly apiKey: string, readonly pollIntervalSeconds = 30) {}
 
-  async fetchLatest(since: Date): Promise<NewsArticle[]> {
-                      const url = new URL("https://api.massive.com/benzinga/v2/news");
-                      url.searchParams.set("apiKey", this.apiKey);
-                      url.searchParams.set("limit", "50");
-                      url.searchParams.set("sort", "published.desc");
+    async fetchLatest(since: Date): Promise<NewsArticle[]> {
+              const url = new URL("https://api.massive.com/benzinga/v2/news");
+              url.searchParams.set("apiKey", this.apiKey);
+              url.searchParams.set("limit", "50");
+              url.searchParams.set("sort", "published.desc");
 
-                  const response = await fetch(url, { headers: { accept: "application/json" } });
-                      if (!response.ok) throw new Error(`Benzinga failed: ${response.status} ${await response.text()}`);
-                      const raw = (await response.json()) as unknown;
-                      const list: BenzingaArticle[] = Array.isArray((raw as { results?: unknown })?.results) ? ((raw as { results: BenzingaArticle[] }).results) : Array.isArray(raw) ? (raw as BenzingaArticle[]) : [];
+          const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+              if (!response.ok) throw new Error(`Benzinga failed: ${response.status} ${await response.text()}`);
+              const raw = (await response.json()) as unknown;
+              const list: BenzingaArticle[] = Array.isArray((raw as { results?: unknown })?.results) ? ((raw as { results: BenzingaArticle[] }).results) : Array.isArray(raw) ? (raw as BenzingaArticle[]) : [];
 
-                  return list.flatMap((article) => {
-                                            if (!article.title || !article.url || !article.published) return [];
-                                            const publishedAt = new Date(article.published);
-                                            if (Number.isNaN(publishedAt.getTime()) || publishedAt < since) return [];
-                                            const haystack = `${article.title} ${article.teaser ?? ""} ${article.body ?? ""}`.toLowerCase();
-                                            if (!TOPICS_LOWER.some((topic) => haystack.includes(topic))) return [];
-                                            return [
-                                                        {
-                                                                                                provider: this.name,
-                                                                                                providerId: String(article.benzinga_id ?? article.url),
-                                                                                                title: article.title,
-                                                                                                summary: article.teaser ?? "",
-                                                                                                url: article.url,
-                                                                                                publishedAt,
-                                                                                                sourceName: "Benzinga"
-                                                        } satisfies NewsArticle
-                                                                              ];
-                  });
-  }
+          const matched = list.flatMap((article) => {
+                        if (!article.title || !article.url || !article.published) return [];
+                        const publishedAt = new Date(article.published);
+                        if (Number.isNaN(publishedAt.getTime()) || publishedAt < since) return [];
+                        const haystack = `${article.title} ${article.teaser ?? ""} ${article.body ?? ""}`.toLowerCase();
+                        if (!TOPICS_LOWER.some((topic) => haystack.includes(topic))) return [];
+                        return [
+                          {
+                                                provider: this.name,
+                                                providerId: String(article.benzinga_id ?? article.url),
+                                                title: article.title,
+                                                summary: article.teaser ?? "",
+                                                url: article.url,
+                                                publishedAt,
+                                                sourceName: "Benzinga"
+                          } satisfies NewsArticle
+                                      ];
+          });
+
+          log.info({ provider: this.name, fetched: list.length, matched: matched.length }, "Benzinga poll summary");
+              return matched;
+    }
 }
