@@ -24,8 +24,7 @@ import type { NewsArticle, NewsProvider } from "../types.js";
 // No documented hard rate limit as of writing; default poll is 30s to stay well
 // clear of anything reasonable for a $99/mo individual plan. Raise
 // BENZINGA_POLL_SECONDS if Benzinga ever pushes back with 429s.
-const TOPICS = ["gold", "XAUUSD", "Federal Reserve", "Powell", "CPI", "PCE", "NFP", "DXY", "Treasury yields", "FOMC", "Iran", "oil", "sanctions", "tariffs"].join(",");
-
+const TOPICS = ["gold", "XAUUSD", "DXY", "Bullion", "Safe haven", "Federal Reserve", "FOMC", "Powell", "Warsh", "Waller", "Bowman", "Barr", "Cook", "Jefferson", "Williams", "Daly", "Bostic", "Goolsbee", "Logan", "Musalem", "Schmid", "Collins", "Hammack", "Kashkari", "CPI", "PCE", "NFP", "PPI", "GDP", "Treasury yields", "Treasury", "Bessent", "tariffs", "ECB", "BOE", "BOJ", "PBOC", "China", "Taiwan", "war", "Iran", "Israel", "Russia", "oil", "WTI", "Brent", "Crude Oil", "OPEC", "sanctions", "Houthi", "missile", "strike"].join(",");
 type BenzingaArticle = {
     id?: number | string;
     created?: string;
