@@ -67,6 +67,7 @@ async function tick(): Promise<void> {
                   const articles = await provider.fetchLatest(since);
                   for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
                             const event = assessEvent(article);
+                            const priorStory = store.getStory(event.storyKey);
                             if (store.has(article) || store.hasEvent(event.key)) continue;
                             const publish = async (message: string) => {
                               for (const destination of telegramDestinations) {
@@ -75,6 +76,7 @@ async function tick(): Promise<void> {
                               }
                               store.remember(article, true);
                               store.rememberEvent(event.key, true);
+                              store.rememberStory(event.storyKey, event.action, event.changeType);
                               log.info({ provider: article.provider, title: article.title, score: event.score, highPriority: event.highPriority }, "Event sent to Telegram");
                             };
                             if (!canUseAi()) {
@@ -84,7 +86,7 @@ async function tick(): Promise<void> {
                             }
                             try {
                               const snapshot = await marketSnapshot();
-                              const eventContext = `\n\nEvent intelligence: score ${event.score}/100; high-priority=${event.highPriority}; reasons=${event.reasons.join("; ")}. Analyze what changed and the transmission EVENT → OIL/RISK → INFLATION EXPECTATIONS → TREASURY YIELDS → DXY → XAU; do not wait for price confirmation.`;
+                              const eventContext = `\n\nEvent intelligence: importance=${event.importance}/100; urgency=${event.urgency}/100; source-tier=${event.sourceTier}; classification=${event.changeType}; high-priority=${event.highPriority}; reasons=${event.reasons.join("; ")}; prior-story-action=${priorStory?.action ?? "none"}; prior-story-classification=${priorStory?.changeType ?? "none"}. First explain what changed from story state, then trace EVENT → OIL/RISK → INFLATION EXPECTATIONS → TREASURY YIELDS → DXY → XAU. Do not wait for price confirmation.`;
                               const enrichedArticle = { ...article, summary: `${article.summary}${snapshot ? `\n\nSnapshot pasar saat headline diterima: ${snapshot}` : ""}${eventContext}` };
                               const decision = await editor.assess(enrichedArticle);
                               if (decision.material && decision.telegramMessage) await publish(decision.telegramMessage);
