@@ -37,7 +37,11 @@ export function assessEvent(article: NewsArticle): EventAssessment {
   if (/\b(announces?|said|says|approved|imposed|launched|agreed|meeting|decision|data|surprise|cuts?|hikes?)\b/i.test(text)) score += 10;
 
   const highPriority = Boolean(rule);
-  const keyStem = rule?.key ?? lower.split(" ").slice(0, 10).join("-");
+  // Event identity carries the new action/outcome, not the publisher wording:
+  // "Trump open to meet Iran" and "Iran agrees to meeting" must be separate updates.
+  const action = (lower.match(/\b(meet|meeting|agree|agreeing|approve|approved|impose|imposed|launch|launched|strike|struck|ceasefire|negotia\w*|cut|hike|hold|increase|decrease|disrupt\w*|attack\w*)\b/g) ?? []).slice(0, 3).join("-");
+  const actors = (lower.match(/\b(trump|iran|israel|saudi|houthi|fed|opec|russia|china|treasury)\b/g) ?? []).slice(0, 3).join("-");
+  const keyStem = rule ? `${rule.key}-${actors}-${action}` : lower.split(" ").slice(0, 10).join("-");
   return { key: keyStem.slice(0, 120), score: Math.min(score, 100), highPriority, reasons };
 }
 
