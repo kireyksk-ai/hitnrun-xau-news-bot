@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
@@ -76,7 +76,7 @@ export class IntelligenceStore {
     this.data.brain.causal ??= { graphs:{}, investigations:[] };
     this.data.brain.checkpoints ??= [];
   }
-  private save(): void { writeFileSync(this.path, JSON.stringify(this.data), "utf8"); }
+  private save(): void { const temporary=`${this.path}.tmp`; writeFileSync(temporary, JSON.stringify(this.data), "utf8"); renameSync(temporary,this.path); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
   private counters(): Metrics { return this.data.metrics[this.day()] ??= emptyMetrics(); }
   increment(name: keyof Pick<Metrics, "ingested" | "uniqueEvents" | "alertsSent" | "duplicatesRemoved" | "lowValueRejected" | "unverifiedRejected" | "highRiskMisses" | "providerFailures" | "aiFailures">): void {
