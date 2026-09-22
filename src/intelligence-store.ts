@@ -7,6 +7,7 @@ import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketE
 import type { DriftRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
 import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.js";
 import type { Checkpoint } from "./delayed-outcomes.js";
+import { learningContext } from "./learning-context.js";
 
 export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
@@ -38,6 +39,7 @@ export type MarketMemoryPack = {
   previousAlert: AlertMemory | null;
   informationDelta: { previousKnownState: string | null; newVerifiedInformation: string; delta: string };
   openUncertainties: string[];
+  learningContext: Record<string, unknown>;
 };
 const emptyMetrics = (): Metrics => ({ ingested: 0, uniqueEvents: 0, alertsSent: 0, duplicatesRemoved: 0,
   lowValueRejected: 0, unverifiedRejected: 0, highRiskMisses: 0, providerFailures: 0, aiFailures: 0,
@@ -289,12 +291,15 @@ export class IntelligenceStore {
     if (event.sourceTier === 3) uncertainties.push("single tier-three source; independent corroboration required");
     if (event.changeType === "RUMOR") uncertainties.push("report remains unconfirmed");
     if (!snapshot) uncertainties.push("fresh cross-market snapshot unavailable");
+    const learning = learningContext(this.data.brain ?? emptyBrain(), this.quantitative(), { trigger:event.storyKey, causalChannel:event.storyKey,
+      regime:this.regime, source:article.sourceName ?? article.provider, actor:article.author ?? article.sourceMeta?.authorId,
+      session:this.data.brain?.snapshots.at(-1)?.session, crossAsset:true, now:event.eventTime });
     return { currentEvent: { verifiedFacts: event.fact, sourceConfidence: event.sourceConfidence, eventTime: event.eventTime, changeType: event.changeType },
       previousStoryState: prior ?? null, actorStances, macroContext, marketSnapshot: snapshot,
       previousAlert,
       informationDelta: { previousKnownState: prior?.lastFact ?? null, newVerifiedInformation: event.fact,
         delta: event.informationDelta === 0 ? "no material delta" : event.changeType === "DENIAL" ? "reversal/denial of prior state" : "new fact or changed state" },
-      openUncertainties: uncertainties };
+      openUncertainties: uncertainties, learningContext: learning };
   }
   rememberStory(event: EventAssessment, sent: boolean): void {
     this.data.stories[event.storyKey] = { key: event.storyKey, lastAction: event.action,
