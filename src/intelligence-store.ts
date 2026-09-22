@@ -138,13 +138,19 @@ export class IntelligenceStore {
   /** Deterministic, reversible cleanup: quarantine only records with no valid market topic or channel. */
   quarantineIrrelevantEvidence(): number {
     const brain = this.data.brain ??= emptyBrain(); brain.quarantine ??= {};
-    let count = 0;
-    for (const [id, record] of Object.entries(brain.evidence)) {
+    const irrelevant = Object.entries(brain.evidence).filter(([, record]) => {
       const eligible = /^(fed-policy|us-macro-|iran-gulf-conflict|oil-supply|trade-sanctions|china-gold|structural-gold|treasury-|fx-)/.test(record.topic) ||
         /gold|xau|fed|fomc|inflation|yield|treasury|dxy|dollar|oil|crude|brent|wti|hormuz|iran|sanction|tariff|macro|central bank|etf|comex|physical/i.test(`${record.topic} ${record.subtopic} ${record.facts}`);
-      if (!eligible) { brain.quarantine[id] = { quarantinedAt: new Date().toISOString(), reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION", original: record }; delete brain.evidence[id]; count++; }
+      return !eligible;
+    });
+    if (!irrelevant.length) return 0;
+    // A cleanup always keeps a complete pre-cleanup copy on the persistent disk.
+    if (existsSync(this.path)) copyFileSync(this.path, `${this.path}.backup-pre-memory-cleanup-${Date.now()}`);
+    for (const [id, record] of irrelevant) {
+      brain.quarantine[id] = { quarantinedAt: new Date().toISOString(), reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION", original: record };
+      delete brain.evidence[id];
     }
-    if (count) this.save(); return count;
+    this.save(); return irrelevant.length;
   }
   recordMarketSnapshot(snapshot: MarketPoint): void {
     const brain = this.data.brain ??= emptyBrain(); brain.snapshots.push(snapshot);

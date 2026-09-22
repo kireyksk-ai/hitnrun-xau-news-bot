@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IntelligenceStore } from "../dist/intelligence-store.js";
@@ -38,8 +38,9 @@ test("generic earnings, real estate and AI disputes never enter persistent memor
   assert.equal(Object.keys(store.marketBrain().evidence).length, 0);
 });
 test("deterministic cleanup quarantines legacy noise without deleting it", () => {
-  const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "brain-")), "state.json"));
+  const dir = mkdtempSync(join(tmpdir(), "brain-")); const store = new IntelligenceStore(join(dir, "state.json"));
   const a = article("Amazon blocks Meta AI shopping agent"); const e = assessEvent(a);
   const brain = store.marketBrain(); brain.evidence[e.key] = { id: e.key, timestamp: new Date().toISOString(), topic: "other-noise", subtopic: "event", facts: a.title, entities: [], provider: "fixture", sourceTier: 2, verification: "RELIABLE_WIRE", delta: "NEW_INFORMATION", alertDecision: "MEMORY_ONLY" };
   assert.equal(store.quarantineIrrelevantEvidence(), 1); assert.equal(Object.keys(store.marketBrain().evidence).length, 0); assert.ok(store.marketBrain().quarantine[e.key]);
+  assert.ok(readdirSync(dir).some((name) => name.includes("backup-pre-memory-cleanup-")));
 });

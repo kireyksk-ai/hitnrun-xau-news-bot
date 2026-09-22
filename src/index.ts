@@ -35,6 +35,8 @@ const providers: NewsProvider[] = [
 ];
 if (!providers.length) throw new Error("No news provider configured");
 const store = new IntelligenceStore(`${config.SQLITE_PATH}.intelligence.json`);
+const quarantinedEvidence = store.quarantineIrrelevantEvidence();
+if (quarantinedEvidence) log.warn({ quarantinedEvidence }, "Quarantined irrelevant legacy market-memory evidence");
 for (const provider of providers) store.markProvider(provider.name, "CONFIGURED");
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
 const discoveredDestination = config.TELEGRAM_CHAT_ID ? undefined : await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
