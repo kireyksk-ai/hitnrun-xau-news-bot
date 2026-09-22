@@ -23,7 +23,8 @@ export type ReviewRecord = {
 };
 type Metrics = { ingested: number; uniqueEvents: number; alertsSent: number; duplicatesRemoved: number;
   lowValueRejected: number; unverifiedRejected: number; highRiskMisses: number;
-  providerFailures: number; aiFailures: number; latencyTotalMs: number; latencyCount: number;
+  providerFailures: number; aiFailures: number; obviousNoiseDrop: number; plausibleMacroToSol: number;
+  deterministicMaterialToSol: number; solReject: number; solSend: number; latencyTotalMs: number; latencyCount: number;
   providerLatencyMs: Record<string, { total: number; count: number }> };
 export type ActorStance = { actor: string; storyKey: string; stance: string; changeType: ChangeType; updatedAt: string; sourceConfidence: number };
 export type MacroRelease = { release: string; actual?: string; consensus?: string; previous?: string; revision?: string; surprise?: "UP" | "DOWN" | "NEUTRAL"; timestamp: string; eventKey: string };
@@ -44,6 +45,7 @@ export type MarketMemoryPack = {
 };
 const emptyMetrics = (): Metrics => ({ ingested: 0, uniqueEvents: 0, alertsSent: 0, duplicatesRemoved: 0,
   lowValueRejected: 0, unverifiedRejected: 0, highRiskMisses: 0, providerFailures: 0, aiFailures: 0,
+  obviousNoiseDrop: 0, plausibleMacroToSol: 0, deterministicMaterialToSol: 0, solReject: 0, solSend: 0,
   latencyTotalMs: 0, latencyCount: 0, providerLatencyMs: {} });
 type Data = { records: Record<string, ReviewRecord>; stories: Record<string, StoryState>; metrics: Record<string, Metrics>;
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
@@ -81,8 +83,13 @@ export class IntelligenceStore {
   }
   private save(): void { const temporary=`${this.path}.tmp`; writeFileSync(temporary, JSON.stringify(this.data), "utf8"); renameSync(temporary,this.path); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
-  private counters(): Metrics { return this.data.metrics[this.day()] ??= emptyMetrics(); }
-  increment(name: keyof Pick<Metrics, "ingested" | "uniqueEvents" | "alertsSent" | "duplicatesRemoved" | "lowValueRejected" | "unverifiedRejected" | "highRiskMisses" | "providerFailures" | "aiFailures">): void {
+  private counters(): Metrics {
+    const current = this.data.metrics[this.day()] ??= emptyMetrics();
+    // Older daily metric objects predate routing telemetry; fill only missing keys.
+    for (const [key, value] of Object.entries(emptyMetrics())) if (current[key as keyof Metrics] === undefined) (current as Record<string, unknown>)[key] = value;
+    return current;
+  }
+  increment(name: keyof Pick<Metrics, "ingested" | "uniqueEvents" | "alertsSent" | "duplicatesRemoved" | "lowValueRejected" | "unverifiedRejected" | "highRiskMisses" | "providerFailures" | "aiFailures" | "obviousNoiseDrop" | "plausibleMacroToSol" | "deterministicMaterialToSol" | "solReject" | "solSend">): void {
     this.counters()[name]++; this.save();
   }
   providerLatency(provider: string, milliseconds: number): void {
@@ -334,7 +341,7 @@ export class IntelligenceStore {
       changeType: "NEW_INFORMATION", sourceTier: 3, sourceConfidence: 0, importance: 0, urgency: 0,
       novelty: 0, marketRelevance: 0, actorImportance: 0, marketMateriality: 0, magnitude: 0,
       transmissionConfidence: 0, causalChannel: null, informationDelta: 0, directionConfidence: 0,
-      highPriority: false, unscheduled: true, transmissionChannels: [], publishedAt: article.publishedAt.toISOString(),
+      highPriority: false, candidateRoute: "OBVIOUS_NOISE", unscheduled: true, transmissionChannels: [], publishedAt: article.publishedAt.toISOString(),
       eventTime: article.publishedAt.toISOString(), firstSeenAt: new Date().toISOString(),
       lastUpdatedAt: new Date().toISOString(), reasons: ["not discovered by provider"] } satisfies EventAssessment;
     this.record({ id, article, event, stage: "SOURCE", primaryDecision: "DROP",
@@ -352,6 +359,8 @@ export class IntelligenceStore {
       `Duplicates removed: ${m.duplicatesRemoved}`, `Low-value rejected: ${m.lowValueRejected}`,
       `Unverified rejected: ${m.unverifiedRejected}`, `High-risk misses: ${m.highRiskMisses}`,
       `Provider failures: ${m.providerFailures}`, `AI failures: ${m.aiFailures}`,
+      `Obvious-noise drops: ${m.obviousNoiseDrop}`, `Plausible macro to Sol: ${m.plausibleMacroToSol}`,
+      `Deterministic material to Sol: ${m.deterministicMaterialToSol}`, `Sol rejects: ${m.solReject}`, `Sol sends: ${m.solSend}`,
       `Detection-to-Telegram average: ${latency} ms`, `Provider latency: ${providers}`,
       `Safe mode: ${this.safeMode ? "ON" : "OFF"}`, `Market regime: ${this.regime}`].join("\n");
   }

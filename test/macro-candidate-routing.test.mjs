@@ -1,0 +1,91 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assessEvent, shouldReview } from "../dist/event-intelligence.js";
+import { IntelligenceStore } from "../dist/intelligence-store.js";
+import { processArticle } from "../dist/pipeline.js";
+
+const at = new Date("2026-09-23T10:00:00Z");
+const article = (title, summary = title, sourceName = "Reuters") => ({
+  provider: "wire", providerId: `${title}-${summary}`, title, summary,
+  url: "https://example.test/macro", publishedAt: at, sourceName
+});
+const material = { material: true, confidence: "high", reason: "semantic macro development", telegramMessage:
+  "<b>⚠️ PERKEMBANGAN MAKRO MATERIAL</b>\n\nFakta baru ini berpotensi mengubah ekspektasi pasar terhadap kebijakan, yield, dan dolar AS. Informasi tersebut perlu dipantau karena dampaknya dapat meluas ke aset lindung nilai.\n\nBuat emas, jalurnya bergantung pada perubahan ekspektasi suku bunga, yield, dolar, dan premi risiko. Arah emas belum jelas sampai reaksi lintas aset lebih konsisten." };
+
+const plausible = [
+  "Fed Barkin says the Fed is highly attentive to financial conditions, but cannot assume markets will keep rates at a level needed to cool inflation.",
+  "Treasury WI 2-year yield 4.785% before $69 billion auction.",
+  "Central bank announces purchase of gold reserves as part of reserve diversification.",
+  "Gold ETF reports material net inflow into GLD holdings.",
+  "DXY rises as Treasury yields reprice after macro data.",
+  "Fed official gives guidance on financial conditions and the rate path."
+];
+
+test("macro candidates reach Sol even when no narrow causal channel exists", () => {
+  for (const title of plausible) {
+    const event = assessEvent(article(title));
+    assert.notEqual(event.candidateRoute, "OBVIOUS_NOISE", title);
+    assert.equal(shouldReview(event), true, title);
+  }
+  for (const title of plausible.slice(0, 5)) {
+    const event = assessEvent(article(title));
+    assert.equal(event.candidateRoute, "PLAUSIBLE_MACRO", title);
+    assert.equal(event.causalChannel, null, title);
+  }
+});
+
+test("obvious corporate noise never receives macro channels or Sol budget", async () => {
+  const noise = [
+    "CNBC Final Trades: analyst upgrades an oil company stock",
+    "Stock movers: shares of Oil Corp jump after earnings",
+    "Whale alert moves crypto between wallets",
+    "Company acquisition rumor involves an energy software startup",
+    "FDA approves a single-company drug",
+    "Analyst sees company AI growth accelerating after quarterly results"
+  ];
+  for (const title of noise) {
+    const event = assessEvent(article(title));
+    assert.equal(event.candidateRoute, "OBVIOUS_NOISE", title);
+    assert.equal(event.causalChannel, null, title);
+    assert.equal(shouldReview(event), false, title);
+  }
+  const path = join(mkdtempSync(join(tmpdir(), "macro-route-")), "state.json");
+  const store = new IntelligenceStore(path);
+  let calls = 0;
+  const result = await processArticle(article(noise[1]), {
+    store,
+    analyze: async () => { calls++; return material; },
+    shadow: async () => { calls++; return { material: true, score: 99, reason: "must not run" }; },
+    deliver: async () => ({ chat: 1 }), now: () => at
+  });
+  assert.equal(result.stage, "SCORE");
+  assert.match(result.reason, /^OBVIOUS_NOISE_DROP/);
+  assert.equal(calls, 0);
+  const persisted = JSON.parse(readFileSync(path, "utf8"));
+  const daily = Object.values(persisted.metrics)[0];
+  assert.equal(daily.obviousNoiseDrop, 1);
+});
+
+test("routing counters persist plausible Sol, deterministic Sol, Sol reject and Sol send", async () => {
+  const path = join(mkdtempSync(join(tmpdir(), "macro-count-")), "state.json");
+  const store = new IntelligenceStore(path);
+  const deps = {
+    store,
+    analyze: async (item) => item.title.includes("Treasury")
+      ? { material: false, confidence: "low", reason: "not material after context", telegramMessage: null }
+      : material,
+    shadow: async () => ({ material: false, score: 10, reason: "not material" }),
+    deliver: async () => ({ chat: 1 }), now: () => at
+  };
+  assert.equal((await processArticle(article(plausible[0]), deps)).stage, "SENT");
+  assert.equal((await processArticle(article(plausible[1]), deps)).stage, "AI");
+  assert.equal((await processArticle(article("Iran announces Hormuz shipping shutdown"), deps)).stage, "SENT");
+  const metrics = Object.values(JSON.parse(readFileSync(path, "utf8")).metrics)[0];
+  assert.equal(metrics.plausibleMacroToSol, 2);
+  assert.equal(metrics.deterministicMaterialToSol, 1);
+  assert.equal(metrics.solReject, 1);
+  assert.equal(metrics.solSend, 2);
+});

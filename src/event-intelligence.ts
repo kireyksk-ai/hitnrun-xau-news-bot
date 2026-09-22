@@ -3,6 +3,8 @@ import type { NewsArticle } from "./types.js";
 
 export type ChangeType = "NEW_INFORMATION" | "CONFIRMATION" | "REPEAT" | "RUMOR" | "DENIAL" | "ESCALATION" | "DE_ESCALATION" | "POLICY_CHANGE";
 export type SourceTier = 1 | 2 | 3;
+/** Cheap routing classification; Sol remains the semantic materiality judge. */
+export type CandidateRoute = "OBVIOUS_NOISE" | "PLAUSIBLE_MACRO" | "DETERMINISTIC_MATERIAL";
 export type StoryState = { key: string; lastAction: string; lastFact: string; lastChange: ChangeType; updatedAt: string; sent: boolean };
 export type EventAssessment = {
   key: string; storyKey: string; action: string; fact: string; entities: string[];
@@ -10,7 +12,7 @@ export type EventAssessment = {
   importance: number; urgency: number; novelty: number; marketRelevance: number;
   actorImportance: number; marketMateriality: number; magnitude: number; transmissionConfidence: number;
   causalChannel: string | null;
-  informationDelta: number; directionConfidence: number; highPriority: boolean;
+  informationDelta: number; directionConfidence: number; highPriority: boolean; candidateRoute: CandidateRoute;
   unscheduled: boolean; transmissionChannels: string[]; quotedText?: string;
   publishedAt: string; eventTime: string; firstSeenAt: string; lastUpdatedAt: string;
   reasons: string[];
@@ -25,11 +27,20 @@ const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly o
 const mediaOrPersonal = /\b(cnn|politico|msnbc|journalists?|press access|media seating|news media|polling|television ratings?|anchor|newspaper|campaign volunteer|birthday|award|sports champion|charity gala|social media followers?|judge over personal|court scheduling)\b/i;
 const macro = /\b(cpi|pce|nfp|payroll|unemployment|retail sales|gdp|ism|jobless claims|inflation data)\b/i;
 const surprise = /\b(above consensus|below consensus|surprise|sharply|revised|revision|plunges?|surges?|shock|higher than forecast|lower than forecast)\b/i;
-const rates = /\b(fed|fomc|interest rates?|rate cuts?|rate hikes?|treasury|yields?|dollar|dxy|debt|deficit|fiscal|tax policy|stimulus|balance sheet|reserves?)\b/i;
+const rates = /\b(fed|fomc|interest rates?|rate cuts?|rate hikes?|treasury|yields?|dollar|dxy|debt|deficit|fiscal|tax policy|stimulus|balance sheet)\b/i;
 const geo = /\b(iran|israel|russia|ukraine|china|hormuz|houthi|war|ceasefire|military|missile|peace talks?)\b/i;
 const energy = /\b(oil|crude|brent|wti|tanker|shipping|opec|energy facilit|export terminal|strategic oil reserves?|oil reserves?)\b/i;
 const trade = /\b(tariffs?|sanctions?|trade agreement|trade policy|export controls?)\b/i;
+// Ordinary company news can contain words such as oil, China, or AI without
+// becoming a macro event. Keep that high-volume firehose out of Sol.
+const obviousCorporateNoise = /\b(cnbc final trades?|final trades?|stock movers?|share(?:s)? (?:rise|fall|jump|drop)|analyst (?:upgrade|downgrade|rating|target)|price target|whale (?:alert|activity|wallet)|(?:merger|acquisition|takeover|m&a) (?:rumou?r|talks?|speculation)|fda|clinical trial|drug approval|biotech|earnings|quarterly results?|revenue|product launch|company ai|artificial intelligence growth|data center sales|chip sales|insider (?:buying|selling)|crypto(?:currency)?|bitcoin|memecoin|nft|entertainment|celebrity|sports|campaign rally|local candidate|late-night|photograph|media (?:coverage|access|seating)|television ratings?|poll numbers?)\b/i;
+const plausibleMacro = /\b(fed|fomc|federal reserve|monetary policy|financial conditions?|interest rates?|rate path|quantitative tightening|balance sheet|cpi|pce|ppi|nfp|nonfarm|payroll|unemployment|wages?|jobless claims|ism|gdp|retail sales|treasury (?:auction|issuance|financing|supply|bill|note|bond)|when-issued|\bwi\b|term premium|yield curve|treasury yields?|real yields?|dxy|u\.s\. dollar|usd|eurusd|usdjpy|oil|crude|brent|wti|opec|oil supply|shipping|tanker|hormuz|iran|middle east|houthi|sanctions?|tariffs?|trade policy|export controls?|trump|fiscal|deficit|debt ceiling|treasury financing|central bank (?:gold|reserve)|gold reserves?|reserve diversification|gold etf|gld|iau|comex|gold positioning|physical gold|gold demand|gold supply|ecb|boe|boj|pboc)\b/i;
+
+function isObviousNoise(text: string): boolean {
+  return obviousCorporateNoise.test(text) || minorOrCommentary.test(text) || mediaOrPersonal.test(text);
+}
 function causalChannel(text: string): string | null {
+  if (isObviousNoise(text)) return null;
   if (minorOrCommentary.test(text)) return null;
   // A media/personal grievance remains non-market even if it mentions Iran or Fed.
   if (mediaOrPersonal.test(text) && !/\b(announces?|orders?|imposes?|approves?|cancels?|withdraws?|cuts?|hikes?)\b.{0,90}\b(tariffs?|sanctions?|rates?|oil|iran policy|fed policy|tax policy)\b/i.test(text)) return null;
@@ -90,6 +101,7 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   const marketRelevance = relevant.test(text) ? 80 : 10;
   const sourceConfidence = tier === 1 ? 95 : tier === 2 ? 80 : 45;
   const channel = causalChannel(text);
+  const candidateRoute: CandidateRoute = isObviousNoise(text) ? "OBVIOUS_NOISE" : channel ? "DETERMINISTIC_MATERIAL" : plausibleMacro.test(text) ? "PLAUSIBLE_MACRO" : "OBVIOUS_NOISE";
   const actorImportance = authority.test(text) ? 90 : 40;
   const marketMateriality = channel ? 85 : 0;
   const magnitude = channel ? (/\b(major|surprise|sharply|shutdown|strike|attack|ceasefire|sanctions?|tariffs?)\b/i.test(text) ? 90 : 75) : 0;
@@ -111,13 +123,16 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   if (stanceShift) reasons.push("material actor stance change");
   return { key, storyKey, action, fact, entities: namedEntities, changeType, sourceTier: tier, sourceConfidence,
     importance, urgency, novelty, marketRelevance, actorImportance, marketMateriality, magnitude, transmissionConfidence, causalChannel: channel,
-    informationDelta, directionConfidence: 0, highPriority,
+    informationDelta, directionConfidence: 0, highPriority, candidateRoute,
     unscheduled, transmissionChannels: [...new Set(transmissionChannels)], quotedText,
     publishedAt: article.publishedAt.toISOString(), eventTime: article.publishedAt.toISOString(),
     firstSeenAt: seenAt.toISOString(), lastUpdatedAt: seenAt.toISOString(), reasons };
 }
 export function shouldReview(event: EventAssessment, prior?: StoryState): boolean {
   if (event.informationDelta === 0) return false;
+  if (event.candidateRoute === "OBVIOUS_NOISE") return false;
+  // Plausible macro is an eligibility path, not a deterministic materiality verdict.
+  if (event.candidateRoute === "PLAUSIBLE_MACRO") return !(prior && event.informationDelta < 60 && event.changeType !== "DENIAL");
   if (!event.causalChannel || event.marketMateriality < 65 || event.transmissionConfidence < 65) return false;
   if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
   return event.highPriority || event.importance >= 65;

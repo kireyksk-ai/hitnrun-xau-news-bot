@@ -38,11 +38,16 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     reason: event.reasons.join("; "), audit: auditBase };
   deps.store.record(record);
   if (!shouldReview(event, prior)) {
-    record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason: "HARD_FILTER_REJECT: Importance/delta below threshold", audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
+    const reason = event.candidateRoute === "OBVIOUS_NOISE" ? "OBVIOUS_NOISE_DROP: No plausible macro/XAU transmission" : "HARD_FILTER_REJECT: Importance/delta below threshold";
+    record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason, audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
     deps.store.observeMarketEvent(article, event);
     deps.store.rememberEvidence(article, event, false);
-    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected"); return record;
+    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected");
+    if (event.candidateRoute === "OBVIOUS_NOISE") deps.store.increment("obviousNoiseDrop");
+    return record;
   }
+  if (event.candidateRoute === "PLAUSIBLE_MACRO") deps.store.increment("plausibleMacroToSol");
+  else deps.store.increment("deterministicMaterialToSol");
   let enriched = article;
   try {
     const market = await deps.snapshot?.();
@@ -93,8 +98,12 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   const corroborated = event.sourceTier <= 2;
   const aiSupports = Boolean(primary?.material || shadowSupports);
   const aiUnavailable = !primary && !shadow;
-  const publish = corroborated && Boolean(event.causalChannel) && event.marketMateriality >= 65 &&
+  const deterministicPublish = corroborated && Boolean(event.causalChannel) && event.marketMateriality >= 65 &&
     event.transmissionConfidence >= 65 && (aiSupports || (event.highPriority && aiUnavailable));
+  // A plausible macro candidate reaches Sol without a keyword-built channel.
+  // It may publish only when trusted-source Sol evidence supports it.
+  const plausiblePublish = corroborated && event.candidateRoute === "PLAUSIBLE_MACRO" && aiSupports;
+  const publish = deterministicPublish || plausiblePublish;
   record = { ...record, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
     reason: primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
     audit: { ...auditBase, aiCalled: true, schema: "VALID", fallbackAttempted: true, outcome: publish ? "PENDING" : "INTELLIGENCE_NOT_MATERIAL" } };
@@ -105,9 +114,10 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   if (!publish) {
     deps.store.record(record); deps.store.markProcessedIdentity(article, event.key);
     deps.store.rememberEvidence(article, event, false);
-    deps.store.increment("lowValueRejected");
+    deps.store.increment("lowValueRejected"); if (!aiUnavailable && !aiSupports) deps.store.increment("solReject");
     return record;
   }
+  deps.store.increment("solSend");
   const message = primary?.material ? primary.telegramMessage : null;
   if (message === null) {
     record = { ...record, stage: "FORMAT", primaryDecision: "REVIEW", reason: "FORMATTER_FAILURE: AI produced no Indonesian NEWS narrative", audit: { ...record.audit!, outcome: "FORMATTER_FAILURE" } };
