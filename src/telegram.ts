@@ -1,3 +1,4 @@
+import type { IntelligenceStore } from "./intelligence-store.js";
 export type TelegramDestination = { chatId: string; messageThreadId?: number };
 
 export async function sendTelegramMessage(token: string, destination: TelegramDestination, text: string): Promise<number> {
@@ -10,6 +11,9 @@ export async function sendTelegramMessage(token: string, destination: TelegramDe
   if (!result.result?.message_id) throw new Error("Telegram response had no message id");
   return result.result.message_id;
 }
+
+/** Send existing public destinations as one health-accounted batch; no extra messages are generated. */
+export async function deliverTelegramMessage(token:string,destinations:TelegramDestination[],text:string,store:IntelligenceStore,sender:typeof sendTelegramMessage=sendTelegramMessage):Promise<{accepted:Record<string,number>;failures:Array<{chatId:string;error:string}>}>{const accepted:Record<string,number>={},failures:Array<{chatId:string;error:string}>=[],outcomes=[];for(const destination of destinations){try{accepted[destination.chatId]=await sender(token,destination,text);outcomes.push({destination:destination.chatId,success:true});}catch(error){const message=error instanceof Error?error.message:"unknown Telegram send failure";failures.push({chatId:destination.chatId,error:message});outcomes.push({destination:destination.chatId,success:false,error:message});}}store.recordTelegramDeliveryAttempt(outcomes);return{accepted,failures};}
 
 export type AdminUpdate = { update_id: number; message?: {
   from?: { id?: number }; chat?: { id?: number }; text?: string;

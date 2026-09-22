@@ -32,6 +32,8 @@ export type ShadowDecision = {
   attribution: "CONFIRMED_DRIVER" | "LIKELY_DRIVER" | "POSSIBLE_DRIVER" | "MULTIPLE_COMPETING_DRIVERS" | "INSUFFICIENT_EVIDENCE" | "DRIVER_UNKNOWN";
   facts: string[]; channels: string[]; confidence: number; productionDecision?: string;
 };
+export type TelegramDestinationHealth = { lastAttemptAt?:string; lastSuccessAt?:string; lastFailureAt?:string; consecutiveFailures:number; totalAttempts:number; totalSuccesses:number; totalFailures:number; lastError?:string; state:"NEVER_TESTED"|"HEALTHY"|"DEGRADED"|"FAILED" };
+export type TelegramHealth = TelegramDestinationHealth & { destinations:Record<string,TelegramDestinationHealth>; lastOutcome?:"SUCCESS"|"PARTIAL_FAILURE"|"TOTAL_FAILURE" };
 export type MarketExperience = { id: string; createdAt: string; regime: string; trigger: string; marketSnapshotId?: string; attribution: ShadowDecision["attribution"]; confidence: number; outcome?: string; checkpoint?: import("./delayed-outcomes.js").Checkpoint; quantitative?: { modelId?:string; modelVersion?:number; residual?:number; relationshipState?:string; positioningState?:string; sampleSize?:number; stability?:string; sourceReputationState?:string; scorecardId?:string } };
 export type PersistentMarketBrain = {
   schemaVersion: number;
@@ -42,6 +44,7 @@ export type PersistentMarketBrain = {
   shadow: ShadowDecision[];
   experiences: MarketExperience[];
   providerHealth: Record<string, { configured: boolean; lastFetchedAt?: string; lastLiveDataAt?: string; lastError?: string }>;
+  telegramHealth?: TelegramHealth;
   quarantine?: Record<string, { quarantinedAt: string; reason: string; original: EvidenceRecord }>;
   lastObserverAt?: string;
   quantitative?: import("./quantitative.js").QuantitativeState;

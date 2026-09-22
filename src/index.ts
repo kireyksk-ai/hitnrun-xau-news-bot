@@ -16,7 +16,7 @@ import { TwitterWireProvider } from "./providers/twitter-wire.js";
 import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
-import { discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
+import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
 import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, learningAlerts } from "./learning-observability.js";
@@ -71,11 +71,8 @@ async function deliver(message: string, id: string, article: import("./types.js"
     log.error({ id }, "Safe mode enabled after abnormal alert volume");
     return {};
   }
-  const accepted: Record<string, number> = {};
-  for (const destination of destinations) {
-    try { accepted[destination.chatId] = await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, destination, message); }
-    catch (error) { log.error({ err: error, chatId: destination.chatId, id }, "Telegram destination failed"); }
-  }
+  const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN,destinations,message,store);
+  for (const failure of failures) log.error({ chatId: failure.chatId, id, error: failure.error }, "Telegram destination failed");
   if (Object.keys(accepted).length) recentSendTimes.push(Date.now());
   return accepted;
 }

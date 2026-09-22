@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
-import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
+import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision, type TelegramDestinationHealth, type TelegramHealth } from "./persistent-market-brain.js";
 import type { DriftRecord, FairValueRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
 import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.js";
 import type { Checkpoint } from "./delayed-outcomes.js";
@@ -30,6 +30,7 @@ export type MacroRelease = { release: string; actual?: string; consensus?: strin
 export type MemoryEvent = { key: string; storyKey: string; fact: string; action: string; changeType: ChangeType; entities: string[]; sourceConfidence: number; eventTime: string; decision?: "SEND" | "DROP" | "REVIEW"; provenance?: NewsArticle["sourceMeta"] };
 export type CandidateMemoryQuarantine = { quarantinedAt: string; reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION"; original: MemoryEvent };
 export type AlertMemory = { eventKey: string; storyKey: string; delta: number; verification: string; sentAt: string; message?: string };
+export type TelegramAttemptOutcome = { destination:string; success:boolean; error?:string };
 export type MarketMemoryPack = {
   currentEvent: { verifiedFacts: string; sourceConfidence: number; eventTime: string; changeType: ChangeType };
   previousStoryState: StoryState | null;
@@ -256,6 +257,8 @@ export class IntelligenceStore {
     if (status === "ERROR") health.lastError = detail ?? "provider error";
     this.save();
   }
+  telegramHealth():TelegramHealth{return (this.data.brain??=emptyBrain()).telegramHealth??={state:"NEVER_TESTED",consecutiveFailures:0,totalAttempts:0,totalSuccesses:0,totalFailures:0,destinations:{}};}
+  recordTelegramDeliveryAttempt(outcomes:TelegramAttemptOutcome[],at=new Date().toISOString()):void{if(!outcomes.length)return;const health=this.telegramHealth(),compact=(value?:string)=>value?.replace(/https?:\/\/\S+/g,"[url]").replace(/\d{8,}:[A-Za-z0-9_-]+/g,"[token]").slice(0,240);let successes=0,failures=0,lastError:string|undefined;for(const outcome of outcomes){const d=health.destinations[outcome.destination]??={state:"NEVER_TESTED",consecutiveFailures:0,totalAttempts:0,totalSuccesses:0,totalFailures:0} satisfies TelegramDestinationHealth;d.lastAttemptAt=at;d.totalAttempts++;if(outcome.success){successes++;d.totalSuccesses++;d.consecutiveFailures=0;d.lastSuccessAt=at;d.lastError=undefined;d.state="HEALTHY";}else{failures++;d.totalFailures++;d.consecutiveFailures++;d.lastFailureAt=at;d.lastError=compact(outcome.error)??"Telegram send failed";d.state="FAILED";lastError=d.lastError;}health.destinations[outcome.destination]=d;}health.lastAttemptAt=at;health.totalAttempts+=outcomes.length;health.totalSuccesses+=successes;health.totalFailures+=failures;if(successes&&failures){health.state="DEGRADED";health.lastOutcome="PARTIAL_FAILURE";health.lastFailureAt=at;health.lastError=lastError;}else if(successes){health.state="HEALTHY";health.lastOutcome="SUCCESS";health.consecutiveFailures=0;health.lastSuccessAt=at;health.lastError=undefined;}else{health.state="FAILED";health.lastOutcome="TOTAL_FAILURE";health.consecutiveFailures++;health.lastFailureAt=at;health.lastError=lastError??"Telegram send failed";}this.save();}
   marketBrain(): PersistentMarketBrain { return this.data.brain ??= emptyBrain(); }
   private rememberActorStances(article: NewsArticle, event: EventAssessment): void {
     const text = `${article.title} ${article.summary}`.toLowerCase();
