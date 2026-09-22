@@ -45,7 +45,7 @@ export type PersistentMarketBrain = {
   quarantine?: Record<string, { quarantinedAt: string; reason: string; original: EvidenceRecord }>;
   lastObserverAt?: string;
   quantitative?: import("./quantitative.js").QuantitativeState;
-  causal?: { graphs: Record<string, import("./causal-intelligence.js").CausalGraph>; investigations: import("./causal-intelligence.js").AbnormalInvestigation[] };
+  causal?: { graphs: Record<string, import("./causal-intelligence.js").CausalGraph>; history?:Record<string,import("./causal-intelligence.js").CausalGraph[]>; investigations: import("./causal-intelligence.js").AbnormalInvestigation[] };
   checkpoints?: import("./delayed-outcomes.js").Checkpoint[];
 };
 

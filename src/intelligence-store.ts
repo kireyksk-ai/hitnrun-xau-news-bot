@@ -73,7 +73,7 @@ export class IntelligenceStore {
       this.save();
     } else this.data.brain ??= emptyBrain();
     this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] };
-    this.data.brain.causal ??= { graphs:{}, investigations:[] };
+    this.data.brain.causal ??= { graphs:{}, history:{}, investigations:[] }; this.data.brain.causal.history ??= {};
     this.data.brain.checkpoints ??= [];
   }
   private save(): void { const temporary=`${this.path}.tmp`; writeFileSync(temporary, JSON.stringify(this.data), "utf8"); renameSync(temporary,this.path); }
@@ -232,7 +232,7 @@ export class IntelligenceStore {
   recordSourceEvidence(item: SourceEvidence): void { this.quantitative().sourceEvidence[item.source]=item; this.save(); }
   recordQuantDrift(item: DriftRecord): void { this.quantitative().drift.push(item); this.quantitative().drift.splice(0, Math.max(0,this.quantitative().drift.length-500)); this.save(); }
   causalGraphs(): Record<string,CausalGraph> { return ((this.data.brain ??= emptyBrain()).causal ??= {graphs:{},investigations:[]}).graphs; }
-  recordCausalGraph(graph:CausalGraph): void { this.causalGraphs()[graph.storyId]=graph; this.save(); }
+  recordCausalGraph(graph:CausalGraph): void { const c=(this.data.brain ??=emptyBrain()).causal ??= {graphs:{},history:{},investigations:[]};const prior=c.graphs[graph.storyId];if(prior&&prior.updatedAt!==graph.updatedAt)(c.history??={})[graph.storyId]=[...((c.history??{})[graph.storyId]??[]),prior].slice(-20);c.graphs[graph.storyId]=graph;this.save(); }
   recordInvestigation(item:AbnormalInvestigation):void { const c=(this.data.brain ??=emptyBrain()).causal ??= {graphs:{},investigations:[]};c.investigations.push(item);c.investigations.splice(0,Math.max(0,c.investigations.length-500));this.save(); }
   checkpoints():Checkpoint[]{return (this.data.brain ??=emptyBrain()).checkpoints ??=[];}
   scheduleCheckpoint(item:Checkpoint):boolean{if(this.checkpoints().some(x=>x.id===item.id))return false;this.checkpoints().push(item);this.save();return true;}
