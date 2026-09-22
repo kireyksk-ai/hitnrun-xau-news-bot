@@ -54,6 +54,26 @@ test("macro candidates reach Sol even when no narrow causal channel exists", () 
   }
 });
 
+test("distinct macro follow-up reaches Sol despite heuristic delta below 60", async () => {
+  const first = assessEvent(article("Fed Collins says inflation remains too high"));
+  const prior = { key: first.storyKey, lastAction: first.action, lastFact: first.fact,
+    lastChange: first.changeType, updatedAt: at.toISOString(), sent: true };
+  const followUp = article("Fed Collins says labor demand is slowing while inflation remains too high");
+  const event = assessEvent(followUp, prior);
+  assert.equal(event.informationDelta, 45);
+  assert.equal(shouldReview(event, prior), true);
+  const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "follow-up-")), "state.json"));
+  store.rememberStory(first, true);
+  let calls = 0;
+  const result = await processArticle(followUp, { store,
+    analyze: async () => { calls++; return { material: false, confidence: "low", reason: "Sol judged follow-up immaterial", telegramMessage: null }; },
+    shadow: async () => ({ material: false, score: 10, reason: "not material" }),
+    deliver: async () => ({ chat: 1 }), now: () => at });
+  assert.equal(calls, 1);
+  assert.equal(result.stage, "SHADOW");
+  assert.equal(result.primaryDecision, "DROP");
+});
+
 test("obvious corporate noise never receives macro channels or Sol budget", async () => {
   const noise = [
     "CNBC Final Trades: analyst upgrades an oil company stock",

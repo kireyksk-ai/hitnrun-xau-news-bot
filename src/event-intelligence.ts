@@ -132,12 +132,10 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
     publishedAt: article.publishedAt.toISOString(), eventTime: article.publishedAt.toISOString(),
     firstSeenAt: seenAt.toISOString(), lastUpdatedAt: seenAt.toISOString(), reasons };
 }
-export function shouldReview(event: EventAssessment, prior?: StoryState): boolean {
+export function shouldReview(event: EventAssessment, _prior?: StoryState): boolean {
   if (event.informationDelta === 0) return false;
   if (event.candidateRoute === "OBVIOUS_NOISE") return false;
-  // Plausible macro is an eligibility path, not a deterministic materiality verdict.
-  if (event.candidateRoute === "PLAUSIBLE_MACRO") return !(prior && event.informationDelta < 60 && event.changeType !== "DENIAL");
-  if (!event.causalChannel || event.marketMateriality < 65 || event.transmissionConfidence < 65) return false;
-  if (prior && event.informationDelta < 60 && event.changeType !== "DENIAL") return false;
-  return event.highPriority || event.importance >= 65;
+  // Different facts within a broad storyline must reach Sol. The heuristic
+  // delta/causal scores are context, not a semantic materiality verdict.
+  return true;
 }

@@ -128,7 +128,13 @@ test("Fed repeated stance is not a material delta, while a pivot is", async () =
 test("macro memory keeps the release state and repeated report is rejected", async () => {
   const { deps, article } = setup({ material: true, reason: "surprise", telegramMessage: news }, { material: true, score: 90, reason: "new" });
   const first = await processArticle(article("US CPI below consensus at 3.5%", "Consensus 3.7%, previous 3.8%"), deps);
-  const repeat = await processArticle(article("Inflation remains 3.5%", "CPI remains 3.5%"), deps);
+  let solCalls = 0;
+  const repeat = await processArticle(article("Inflation remains 3.5%", "CPI remains 3.5%"), {
+    ...deps,
+    analyze: async () => { solCalls++; return { material: false, confidence: "low", reason: "Same CPI print, no new fact", telegramMessage: null }; },
+    shadow: async () => ({ material: false, score: 10, reason: "repeat" })
+  });
+  assert.equal(solCalls, 1);
   assert.equal(first.stage, "SENT"); assert.notEqual(repeat.stage, "SENT");
   const pack = deps.store.marketContext(first.event, first.article);
   assert.ok(pack.macroContext.length >= 1);
