@@ -204,7 +204,8 @@ export class IntelligenceStore {
   }
   recordMarketSnapshot(snapshot: MarketPoint): void {
     const brain = this.data.brain ??= emptyBrain(); brain.snapshots.push(snapshot);
-    // Keep compact bars, never high-frequency raw tick history.
+    brain.lastObserverAt = snapshot.capturedAt;
+    // Keep compact bars, never high-frequency raw tick history (seven days at five minutes).
     brain.snapshots.splice(0, Math.max(0, brain.snapshots.length - 2_016)); this.save();
   }
   recordShadow(decision: ShadowDecision): void {

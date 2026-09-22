@@ -2,7 +2,7 @@
  * Phase 1-4 state only.  Nothing in this module can change NEWS routing.
  * Records contain evidence and conclusions, never model reasoning traces.
  */
-export const MARKET_BRAIN_SCHEMA_VERSION = 2;
+export const MARKET_BRAIN_SCHEMA_VERSION = 3;
 
 export type EvidenceRecord = {
   id: string; timestamp: string; topic: string; subtopic: string; facts: string;
@@ -10,7 +10,23 @@ export type EvidenceRecord = {
   eventId?: string; storyId?: string; delta: string; alertDecision: "SENT" | "MEMORY_ONLY" | "REJECTED";
   expiryAt?: string; supersedes?: string;
 };
-export type MarketPoint = { capturedAt: string; values: Record<string, { price: number; changePercent: number; fresh: boolean }>; session: string };
+export type DataQuality = "FRESH" | "STALE" | "DATA_UNAVAILABLE";
+export type MarketValue = {
+  price: number; changePercent: number; fresh: boolean;
+  source?: string; observedAt?: string; quality?: DataQuality;
+};
+export type MarketCandle = {
+  open: number; high: number; low: number; close: number; capturedAt: string;
+  session: string; quality: DataQuality; range: number; body: number;
+  bodyRangeRatio: number; upperWick: number; lowerWick: number;
+  closeLocation: number; returnPct: number;
+};
+/** A compact point-in-time record; this is observational data only. */
+export type MarketPoint = {
+  capturedAt: string; values: Record<string, MarketValue>; session: string;
+  unavailableAssets?: string[]; candles?: Record<string, MarketCandle>;
+  coverage?: { available: number; requested: number; quality: DataQuality };
+};
 export type ShadowDecision = {
   timestamp: string; eventId?: string; kind: "CONSISTENT" | "CROSS_ASSET_DIVERGENCE" | "UNEXPLAINED_MOVE" | "DECAYING" | "CONTEXTUAL_ONLY";
   attribution: "CONFIRMED_DRIVER" | "LIKELY_DRIVER" | "POSSIBLE_DRIVER" | "MULTIPLE_COMPETING_DRIVERS" | "INSUFFICIENT_EVIDENCE" | "DRIVER_UNKNOWN";
@@ -34,12 +50,13 @@ export function emptyBrain(now = new Date().toISOString()): PersistentMarketBrai
   return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {} };
 }
 
-export function sessionAt(date: Date): string {
+export function sessionAt(date: Date): "ASIA" | "LONDON" | "NEW_YORK" | "LONDON_NEW_YORK_OVERLAP" | "ROLLOVER_TRANSITION" {
   const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "2-digit", hourCycle: "h23" }).format(date));
   if (hour < 7) return "ASIA";
   if (hour < 12) return "LONDON";
+  if (hour < 16) return "LONDON_NEW_YORK_OVERLAP";
   if (hour < 21) return "NEW_YORK";
-  return "ROLL_OVER";
+  return "ROLLOVER_TRANSITION";
 }
 
 export function classifyEvidence(topic: string, facts: string): { stateKey: string; subtopic: string } {
