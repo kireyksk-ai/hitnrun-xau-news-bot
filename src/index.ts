@@ -20,6 +20,7 @@ import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates,
 import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
+import { formatDailyLearningReview } from "./daily-learning-review.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
@@ -102,7 +103,7 @@ async function adminReport(): Promise<void> {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const misses = store.records().filter((r) => r.adminDecision === "FALSE_NEGATIVE" || r.stage === "SHADOW" && r.primaryDecision !== "SEND").slice(-10);
   const appendix = misses.length ? `\nHigh-risk miss refs: ${misses.map((r) => r.id.slice(0, 10)).join(", ")}` : "";
-  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatLearningStatus(store)}`);
+  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
   store.setLastReportDay(day);
 }
 async function pollAdmin(): Promise<void> {
@@ -118,6 +119,7 @@ async function pollAdmin(): Promise<void> {
       if (input === "/safe on") { store.setSafeMode(true); await reply("Safe mode ON: ingestion berjalan, publishing berhenti."); }
       else if (input === "/safe off") { store.setSafeMode(false); await reply("Safe mode OFF. Gunakan /replay untuk antrean."); }
       else if (input === "/learning") await reply(formatLearningStatus(store));
+      else if (input === "/learned") await reply(formatDailyLearningReview(store));
       else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
       else if (input.startsWith("/fn ") || input.startsWith("/fp ")) {
