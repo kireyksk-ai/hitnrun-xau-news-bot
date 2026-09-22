@@ -5,6 +5,7 @@ import { validateNewsOutput } from "./news-output.js";
 import { IntelligenceStore } from "./intelligence-store.js";
 import type { ReviewRecord } from "./intelligence-store.js";
 import { AIContractFailure } from "./editor.js";
+import { channel, synthesize } from "./causal-intelligence.js";
 
 export type PipelineDeps = {
   store: IntelligenceStore;
@@ -50,6 +51,18 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // Persist after building the context pack: the model sees the state that
   // existed immediately before this candidate, not a state overwritten by it.
   deps.store.observeMarketEvent(article, event);
+  // Persist a compact candidate graph before AI synthesis. It records uncertainty
+  // and competing channels only; it cannot alter the existing NEWS decision.
+  if (event.causalChannel) {
+    const nowIso = now.toISOString();
+    const channels = (event.transmissionChannels.length ? event.transmissionChannels : [event.causalChannel]).map((name, index) =>
+      channel(`${event.key}:${index}`, name, "XAU", index ? "SECOND_ORDER_EFFECT" : "FIRST_ORDER_EFFECT", "INTRADAY", nowIso,
+        event.sourceTier <= 2 ? [event.fact] : [], event.sourceTier > 2 ? ["Independent corroboration required"] : []));
+    const synthesis = synthesize(channels);
+    deps.store.recordCausalGraph({ storyId:event.storyKey, createdAt:nowIso, updatedAt:nowIso, attribution:synthesis.attribution, channels,
+      corrections:[], conflicts:event.sourceTier > 2 ? ["Single tier-three source"] : [], narrative:{known:[event.fact], changed:event.changeType,
+      uncertain:event.sourceTier > 2 ? ["Independent corroboration required"] : [], active:channels.map(item=>item.id), contradicted:[], horizons:["INTRADAY"], latest:event.fact, limitations:[]} });
+  }
 
   let primary: EditorialDecision | undefined;
   let shadow: { material: boolean; score: number; reason: string } | undefined;

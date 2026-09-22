@@ -5,6 +5,7 @@ import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
 import type { DriftRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
+import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.js";
 
 export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
@@ -71,6 +72,7 @@ export class IntelligenceStore {
       this.save();
     } else this.data.brain ??= emptyBrain();
     this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] };
+    this.data.brain.causal ??= { graphs:{}, investigations:[] };
   }
   private save(): void { writeFileSync(this.path, JSON.stringify(this.data), "utf8"); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
@@ -227,6 +229,9 @@ export class IntelligenceStore {
   recordScorecard(item: Scorecard): void { const q=this.quantitative(); const i=q.scorecards.findIndex(x=>x.id===item.id); if(i<0) q.scorecards.push(item); else q.scorecards[i]=item; this.save(); }
   recordSourceEvidence(item: SourceEvidence): void { this.quantitative().sourceEvidence[item.source]=item; this.save(); }
   recordQuantDrift(item: DriftRecord): void { this.quantitative().drift.push(item); this.quantitative().drift.splice(0, Math.max(0,this.quantitative().drift.length-500)); this.save(); }
+  causalGraphs(): Record<string,CausalGraph> { return ((this.data.brain ??= emptyBrain()).causal ??= {graphs:{},investigations:[]}).graphs; }
+  recordCausalGraph(graph:CausalGraph): void { this.causalGraphs()[graph.storyId]=graph; this.save(); }
+  recordInvestigation(item:AbnormalInvestigation):void { const c=(this.data.brain ??=emptyBrain()).causal ??= {graphs:{},investigations:[]};c.investigations.push(item);c.investigations.splice(0,Math.max(0,c.investigations.length-500));this.save(); }
   similarExperiences(regime: string, trigger: string): MarketExperience[] {
     return (this.data.brain?.experiences ?? []).filter((item) => item.regime === regime || item.trigger === trigger).slice(-5);
   }
