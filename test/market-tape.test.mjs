@@ -1,0 +1,2 @@
+import assert from 'node:assert/strict'; import test from 'node:test'; import { anatomy, rangePercentile } from '../dist/market-tape.js';
+test('candle anatomy is measurement-only and protects insufficient samples',()=>{const a=anatomy({open:100,high:110,low:95,close:108,capturedAt:'2026-01-01T00:00:00Z',session:'ASIA',quality:'FRESH'});assert.equal(a.range,15);assert.equal(a.body,8);assert.equal(rangePercentile(10,[1,2]).state,'INSUFFICIENT_SAMPLE');assert.equal(rangePercentile(10,Array.from({length:20},(_,i)=>i)).sampleSize,20);});
