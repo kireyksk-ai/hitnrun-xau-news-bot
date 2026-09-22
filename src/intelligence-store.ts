@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
-import type { DriftRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
+import type { DriftRecord, FairValueRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
 import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.js";
 import type { Checkpoint } from "./delayed-outcomes.js";
 import { learningContext } from "./learning-context.js";
@@ -74,7 +74,7 @@ export class IntelligenceStore {
       this.data.brain = this.data.brain ?? emptyBrain();
       this.save();
     } else this.data.brain ??= emptyBrain();
-    this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] };
+    this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }; this.data.brain.quantitative.fairValues ??= [];
     this.data.brain.causal ??= { graphs:{}, history:{}, investigations:[] }; this.data.brain.causal.history ??= {};
     this.data.brain.checkpoints ??= [];
   }
@@ -225,7 +225,7 @@ export class IntelligenceStore {
     brain.experiences.splice(0, Math.max(0, brain.experiences.length - 500)); this.save();
   }
   /** Versioned shadow evidence only; no method here participates in NEWS routing. */
-  quantitative(): QuantitativeState { return (this.data.brain ??= emptyBrain()).quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }; }
+  quantitative(): QuantitativeState { const q=(this.data.brain ??= emptyBrain()).quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }; q.fairValues??=[]; return q; }
   private trim<T>(items:T[],limit:number):void{items.splice(0,Math.max(0,items.length-limit));}
   private trimRecord(record:Record<string,unknown>,limit:number):void{for(const key of Object.keys(record).slice(0,Math.max(0,Object.keys(record).length-limit)))delete record[key];}
   recordQuantObservation(observation: QuantObservation): void { const q=this.quantitative(); q.observations[`${observation.instrument}|${observation.observedAt}`]=observation; this.trimRecord(q.observations,20_000); this.save(); }
@@ -235,6 +235,7 @@ export class IntelligenceStore {
   recordScorecard(item: Scorecard): void { const q=this.quantitative(); const i=q.scorecards.findIndex(x=>x.id===item.id); if(i<0) q.scorecards.push(item); else q.scorecards[i]=item; this.trim(q.scorecards,500); this.save(); }
   recordSourceEvidence(item: SourceEvidence): void { this.quantitative().sourceEvidence[item.source]=item; this.save(); }
   recordQuantDrift(item: DriftRecord): void { this.quantitative().drift.push(item); this.quantitative().drift.splice(0, Math.max(0,this.quantitative().drift.length-500)); this.save(); }
+  recordFairValue(item:FairValueRecord):void{const values=this.quantitative().fairValues??=[],i=values.findIndex(x=>x.modelId===item.modelId&&x.modelVersion===item.modelVersion&&x.observedAt===item.observedAt);if(i<0)values.push(item);else values[i]=item;this.trim(values,500);this.save();}
   causalGraphs(): Record<string,CausalGraph> { return ((this.data.brain ??= emptyBrain()).causal ??= {graphs:{},investigations:[]}).graphs; }
   recordCausalGraph(graph:CausalGraph): void { const c=(this.data.brain ??=emptyBrain()).causal ??= {graphs:{},history:{},investigations:[]};const prior=c.graphs[graph.storyId];if(prior&&(prior.updatedAt!==graph.updatedAt||JSON.stringify(prior)!==JSON.stringify(graph)))(c.history??={})[graph.storyId]=[...((c.history??{})[graph.storyId]??[]),prior].slice(-20);c.graphs[graph.storyId]=graph;this.save(); }
   recordCausalCorrection(storyId:string, original:string, correction:string, attribution:CausalGraph["attribution"], at:string):void { const current=this.causalGraphs()[storyId];if(!current||current.corrections.some(item=>item.original===original&&item.correction===correction&&item.at===at&&item.attribution===attribution))return;const next={...current,updatedAt:at,attribution,corrections:[...current.corrections,{original,correction,at,attribution}],narrative:{...current.narrative,latest:correction,contradicted:current.narrative.contradicted.includes(original)?current.narrative.contradicted:[...current.narrative.contradicted,original]}};this.recordCausalGraph(next); }
