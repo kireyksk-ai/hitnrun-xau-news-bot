@@ -226,11 +226,13 @@ export class IntelligenceStore {
   }
   /** Versioned shadow evidence only; no method here participates in NEWS routing. */
   quantitative(): QuantitativeState { return (this.data.brain ??= emptyBrain()).quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }; }
-  recordQuantObservation(observation: QuantObservation): void { const q=this.quantitative(); q.observations[`${observation.instrument}|${observation.observedAt}`]=observation; this.save(); }
-  recordQuantModel(model: QuantModel): void { const q=this.quantitative(); if(q.models.some(item=>item.id===model.id&&item.version===model.version)) throw new Error("Quantitative model versions are immutable"); q.models.push(model); this.save(); }
-  recordRelationship(item: Relationship): void { this.quantitative().relationships.push(item); this.save(); }
+  private trim<T>(items:T[],limit:number):void{items.splice(0,Math.max(0,items.length-limit));}
+  private trimRecord(record:Record<string,unknown>,limit:number):void{for(const key of Object.keys(record).slice(0,Math.max(0,Object.keys(record).length-limit)))delete record[key];}
+  recordQuantObservation(observation: QuantObservation): void { const q=this.quantitative(); q.observations[`${observation.instrument}|${observation.observedAt}`]=observation; this.trimRecord(q.observations,20_000); this.save(); }
+  recordQuantModel(model: QuantModel): void { const q=this.quantitative(); if(q.models.some(item=>item.id===model.id&&item.version===model.version)) throw new Error("Quantitative model versions are immutable"); q.models.push(model); this.trim(q.models,100); this.save(); }
+  recordRelationship(item: Relationship): void { const q=this.quantitative(); q.relationships.push(item); this.trim(q.relationships,500); this.save(); }
   recordPositioning(item: PositioningState): void { this.quantitative().positioning.push(item); this.quantitative().positioning.splice(0, Math.max(0,this.quantitative().positioning.length-520)); this.save(); }
-  recordScorecard(item: Scorecard): void { const q=this.quantitative(); const i=q.scorecards.findIndex(x=>x.id===item.id); if(i<0) q.scorecards.push(item); else q.scorecards[i]=item; this.save(); }
+  recordScorecard(item: Scorecard): void { const q=this.quantitative(); const i=q.scorecards.findIndex(x=>x.id===item.id); if(i<0) q.scorecards.push(item); else q.scorecards[i]=item; this.trim(q.scorecards,500); this.save(); }
   recordSourceEvidence(item: SourceEvidence): void { this.quantitative().sourceEvidence[item.source]=item; this.save(); }
   recordQuantDrift(item: DriftRecord): void { this.quantitative().drift.push(item); this.quantitative().drift.splice(0, Math.max(0,this.quantitative().drift.length-500)); this.save(); }
   causalGraphs(): Record<string,CausalGraph> { return ((this.data.brain ??= emptyBrain()).causal ??= {graphs:{},investigations:[]}).graphs; }
