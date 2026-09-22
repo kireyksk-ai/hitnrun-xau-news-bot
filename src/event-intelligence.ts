@@ -56,6 +56,10 @@ const restrictiveStance = /\b(inflation (?:is |remains )?too high|no (?:rate )?c
 const easingStance = /\b(rate cuts?|eas(?:e|ing)|disinflation|inflation progress|allow (?:for )?(?:rate )?cuts?|dovish)\b/i;
 
 export function sourceTier(article: NewsArticle): SourceTier {
+  // X supplies a generic sourceName; its verified actor classification carries
+  // the wire identity that the source-name check below cannot see.
+  if (article.provider === "twitter-wire" && article.sourceMeta?.sourceClass === "FAST_WIRE" &&
+    /^https:\/\/x\.com\/[A-Za-z0-9_]+\/status\/\d+/i.test(article.url)) return 2;
   const source = `${article.sourceName ?? ""} ${article.provider}`.toLowerCase();
   if (/federal reserve|treasury|white house|bureau of labor|bea|eia|central bank|government|truth social/.test(source)) return 1;
   if (/reuters|bloomberg|associated press|financial times|benzinga|firstsquawk|livesquawk|deltaone/.test(source)) return 2;

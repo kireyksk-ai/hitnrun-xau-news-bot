@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assessEvent, shouldReview } from "../dist/event-intelligence.js";
+import { assessEvent, shouldReview, sourceTier } from "../dist/event-intelligence.js";
 import { IntelligenceStore } from "../dist/intelligence-store.js";
 import { processArticle } from "../dist/pipeline.js";
 
@@ -23,6 +23,23 @@ const plausible = [
   "DXY rises as Treasury yields reprice after macro data.",
   "Fed official gives guidance on financial conditions and the rate path."
 ];
+
+test("verified X fast wires retain trusted-source routing, unknown accounts do not", async () => {
+  const wire = { ...article("@FirstSquawk: FED'S COLLINS: RESTRICTIVE RATE WILL HELP RETURN INFLATION TO TARGET"),
+    provider: "twitter-wire", providerId: "123", sourceName: "X / Twitter Wire",
+    url: "https://x.com/FirstSquawk/status/123", sourceMeta: { sourceClass: "FAST_WIRE" } };
+  assert.equal(sourceTier(wire), 2);
+  assert.equal(sourceTier({ ...wire, sourceMeta: { sourceClass: "UNVERIFIED_CLAIM" } }), 3);
+  assert.equal(sourceTier({ ...wire, url: "https://example.test/status/123" }), 3);
+  const run = async (item) => processArticle(item, {
+    store: new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "wire-tier-")), "state.json")),
+    analyze: async () => material,
+    shadow: async () => ({ material: false, score: 10, reason: "not material" }),
+    deliver: async () => ({ chat: 1 }), now: () => at
+  });
+  assert.equal((await run(wire)).stage, "SENT");
+  assert.equal((await run({ ...wire, sourceMeta: { sourceClass: "UNVERIFIED_CLAIM" } })).stage, "SOURCE");
+});
 
 test("macro candidates reach Sol even when no narrow causal channel exists", () => {
   for (const title of plausible) {
