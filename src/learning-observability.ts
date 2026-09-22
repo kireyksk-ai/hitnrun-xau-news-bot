@@ -7,3 +7,13 @@ export function learningStatus(store:IntelligenceStore,now=new Date()):Record<st
 /** Detect only operational failures/recoveries; ordinary sample waiting never pages the admin. */
 export function learningAlerts(store:IntelligenceStore,now=new Date()):LearningAlert[]{const status=learningStatus(store,now) as any,alerts:LearningAlert[]=[];const observe=(key:string,failed:boolean,message:string)=>{const prior=store.learningAlertState(key);const next=failed?"FAILURE":"OK";if(prior===next)return;store.setLearningAlertState(key,next);if(failed)alerts.push({key,state:"FAILURE",message});else if(prior==="FAILURE")alerts.push({key,state:"RECOVERY",message:`RECOVERY: ${message}`});};observe("observer",status.observer==="ERROR","learning observer stale or failed");observe("telegram",status.telegram.state==="FAILED"||status.telegram.state==="DEGRADED",`Telegram delivery ${status.telegram.state.toLowerCase()}`);for(const [name,health] of Object.entries(status.providers as Record<string,{lastError?:string}>)){const failed=Boolean(health.lastError);observe(`provider:${name}`,failed,`provider ${name} ${failed?`failed: ${health.lastError}`:"recovered"}`);}return alerts;}
 export function formatLearningStatus(store:IntelligenceStore,now=new Date()):string{const s=learningStatus(store,now) as any;return[`Learning heartbeat (read-only)`,`Phase 5: ${s.phase5}`,`Tape: ${s.marketTape}; observer: ${s.observer}; Telegram: ${s.telegram.state}`,`Checkpoints pending/completed: ${s.checkpoints.pending}/${s.checkpoints.completed}`,`Experiences: ${s.experiences}; causal graphs: ${s.causalGraphs}`,`Quant observations: ${s.quant.observations}; models: ${s.quant.models}; relationships: ${s.quant.relationships}; calibration: ${s.quant.calibration}`,`Positioning: ${s.quant.positioning}`].join("\n");}
+/** Admin-only, read-only view of the additional source guide and observed evidence. */
+export function formatSourceMemoryStatus(store:IntelligenceStore):string {
+  const evidence=Object.values(store.quantitative().sourceEvidence).sort((a,b)=>b.observations-a.observations);
+  const validated=evidence.filter(item=>item.state==="VALIDATED").length;
+  const lines=["Memori sumber tambahan: AKTIF (panduan tetap + bukti hasil)",
+    `Sumber teramati: ${evidence.length}; reputasi tervalidasi: ${validated}`,
+    "Penilaian sumber tidak otomatis mengubah aturan kirim; sampel kecil bukan vonis."];
+  for(const item of evidence.slice(0,5)) lines.push(`${item.source}: ${item.observations} observasi, ${item.state}`);
+  return lines.join("\n");
+}

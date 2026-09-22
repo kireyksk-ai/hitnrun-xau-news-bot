@@ -19,7 +19,7 @@ import { NewsApiProvider } from "./providers/newsapi.js";
 import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
 import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
-import { formatLearningStatus, learningAlerts } from "./learning-observability.js";
+import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
@@ -118,6 +118,7 @@ async function pollAdmin(): Promise<void> {
       if (input === "/safe on") { store.setSafeMode(true); await reply("Safe mode ON: ingestion berjalan, publishing berhenti."); }
       else if (input === "/safe off") { store.setSafeMode(false); await reply("Safe mode OFF. Gunakan /replay untuk antrean."); }
       else if (input === "/learning") await reply(formatLearningStatus(store));
+      else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
       else if (input.startsWith("/fn ") || input.startsWith("/fp ")) {
         const decision = input.startsWith("/fn ") ? "FALSE_NEGATIVE" : "FALSE_POSITIVE";
