@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IntelligenceStore } from "../dist/intelligence-store.js";
 import { assessEvent } from "../dist/event-intelligence.js";
+import { runtimeActorRegistry, sourceClassFor } from "../dist/actor-registry.js";
 
 function article(title, summary = "", sourceName = "Reuters") { return { provider: "fixture", providerId: title, title, summary, sourceName, url: "https://example.test", publishedAt: new Date("2026-09-22T00:00:00Z") }; }
 test("phase one migrates old state with backup and persists memory-only evidence", () => {
@@ -81,4 +82,17 @@ test("legacy candidate cleanup quarantines only clear noise and keeps uncertain 
   assert.equal(result.candidateMemoryQuarantine.ai.reason, "NO_PLAUSIBLE_MARKET_TRANSMISSION");
   assert.equal(result.candidateMemoryQuarantine.breach.reason, "NO_PLAUSIBLE_MARKET_TRANSMISSION");
   assert.ok(readdirSync(dir).some((name) => name.includes("backup-pre-candidate-memory-cleanup-")));
+});
+test("premium provenance is compact, update-aware, and never makes popularity material", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "brain-")), "state.json"); const store = new IntelligenceStore(path);
+  const a = { ...article("Fed official says inflation remains too high"), provider: "benzinga", providerId: "bz-77",
+    sourceMeta: { stableId: "bz-77", updatedAt: "2026-09-22T01:00:00Z", authorId: "reporter", channels: ["Economics"], tags: ["Fed"], tickers: ["GLD"], publicMetrics: { like_count: 999999 }, sourceClass: "CREDIBLE_REPORTER" } };
+  const e = assessEvent(a); store.observeMarketEvent(a, e);
+  const state = JSON.parse(readFileSync(path, "utf8"));
+  assert.equal(state.memoryEvents[e.key].provenance.stableId, "bz-77");
+  assert.equal(state.memoryEvents[e.key].provenance.publicMetrics.like_count, 999999);
+  assert.equal(e.marketMateriality, 85); // derives from the Fed/rates channel, never metrics.
+  assert.equal(sourceClassFor("DeItaone"), "FAST_WIRE"); assert.equal(sourceClassFor("unknown"), "UNVERIFIED_CLAIM");
+  assert.equal(runtimeActorRegistry('[{"username":"FedTest","sourceClass":"OFFICIAL_DIRECT_STATEMENT","actor":"Federal Reserve","direct":true}]').at(-1).username, "FedTest");
+  assert.equal(runtimeActorRegistry('[{"username":"bad handle!"}]').length, 7);
 });

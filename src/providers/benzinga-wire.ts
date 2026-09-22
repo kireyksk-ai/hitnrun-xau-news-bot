@@ -64,6 +64,11 @@ type BenzingaArticle = {
       teaser?: string;
       body?: string;
       url?: string;
+      last_updated?: string;
+      author?: string;
+      channels?: Array<{ name?: string } | string>;
+      tags?: Array<{ name?: string } | string>;
+      tickers?: Array<{ symbol?: string } | string>;
 };
 
 export class BenzingaWireProvider implements NewsProvider {
@@ -93,10 +98,17 @@ export class BenzingaWireProvider implements NewsProvider {
                                                 provider: this.name,
                                                 providerId: String(article.benzinga_id ?? article.url),
                                                 title: article.title,
+                                                // Full bodies are transient only: useful for the deterministic topic gate,
+                                                // never persisted or exposed to Telegram by default.
                                                 summary: article.teaser ?? "",
                                                 url: article.url,
                                                 publishedAt,
-                                                sourceName: "Benzinga"
+                                                sourceName: "Benzinga",
+                                                author: article.author,
+                                                sourceMeta: { stableId: String(article.benzinga_id ?? article.url), updatedAt: article.last_updated,
+                                                  authorId: article.author, channels: (article.channels ?? []).map((x) => typeof x === "string" ? x : x.name ?? "").filter(Boolean),
+                                                  tags: (article.tags ?? []).map((x) => typeof x === "string" ? x : x.name ?? "").filter(Boolean),
+                                                  tickers: (article.tickers ?? []).map((x) => typeof x === "string" ? x : x.symbol ?? "").filter(Boolean), sourceClass: "CREDIBLE_REPORTER" }
                           } satisfies NewsArticle
                                       ];
           });

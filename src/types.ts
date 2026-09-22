@@ -8,7 +8,12 @@ export type NewsArticle = {
   sourceName?: string;
   author?: string;
   postId?: string;
+  /** Compact source metadata for audit/story fusion; never rendered to NEWS. */
+  sourceMeta?: { stableId?: string; updatedAt?: string; authorId?: string; channels?: string[]; tags?: string[]; tickers?: string[];
+    conversationId?: string; editHistoryIds?: string[]; publicMetrics?: Record<string, number>; sourceClass?: SourceClass };
 };
+
+export type SourceClass = "OFFICIAL_DIRECT_STATEMENT" | "CREDIBLE_REPORTER" | "FAST_WIRE" | "SECONDARY_REPORT" | "UNVERIFIED_CLAIM" | "OPINION" | "NOISE";
 
 export interface NewsProvider {
   readonly name: string;

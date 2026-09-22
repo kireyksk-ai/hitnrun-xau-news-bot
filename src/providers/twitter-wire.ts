@@ -1,15 +1,16 @@
 import type { NewsArticle, NewsProvider } from "../types.js";
+import { runtimeActorRegistry, sourceClassFor } from "../actor-registry.js";
 
 const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "unusual_whales", "financialjuice", "WatcherGuru"];
 
-const QUERY = [
-        `(${WIRE_ACCOUNTS.map((handle) => `from:${handle}`).join(" OR ")})`,
+function queryFor(accounts: readonly string[]): string { return [
+        `(${accounts.map((handle) => `from:${handle}`).join(" OR ")})`,
         `(Fed OR Powell OR Warsh OR Waller OR Bowman OR Cook OR Jefferson OR Williams OR Daly OR Bostic`,
         `OR Goolsbee OR Logan OR Musalem OR Schmid OR Collins OR Hammack OR Kashkari`,
         `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU`,
-        `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " );
+        `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " ); }
 
-type XApiTweet = { id: string; text: string; created_at: string; author_id: string };
+type XApiTweet = { id: string; text: string; created_at: string; author_id: string; conversation_id?: string; edit_history_tweet_ids?: string[]; public_metrics?: Record<string, number> };
 type XApiUser = { id: string; username: string };
 type XApiSearchResponse = {
   data?: XApiTweet[];
@@ -59,9 +60,10 @@ export class TwitterWireProvider implements NewsProvider {
     }
 
     const url = new URL("https://api.x.com/2/tweets/search/recent");
-    url.searchParams.set("query", QUERY);
+    const actors = [...new Set([...WIRE_ACCOUNTS, ...runtimeActorRegistry().map((entry) => entry.username)])];
+    url.searchParams.set("query", queryFor(actors));
     url.searchParams.set("max_results", "50");
-    url.searchParams.set("tweet.fields", "created_at,author_id");
+    url.searchParams.set("tweet.fields", "created_at,author_id,conversation_id,edit_history_tweet_ids,public_metrics");
     url.searchParams.set("expansions", "author_id");
     url.searchParams.set("user.fields", "username");
     if (sinceId) url.searchParams.set("since_id", sinceId);
@@ -92,6 +94,8 @@ export class TwitterWireProvider implements NewsProvider {
         url: `https://x.com/${username}/status/${tweet.id}`,
         publishedAt,
         sourceName: "X / Twitter Wire"
+        ,sourceMeta: { stableId: tweet.id, authorId: tweet.author_id, conversationId: tweet.conversation_id,
+          editHistoryIds: tweet.edit_history_tweet_ids, publicMetrics: tweet.public_metrics, sourceClass: sourceClassFor(username) }
       }];
     });
   }

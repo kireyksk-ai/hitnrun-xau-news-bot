@@ -23,7 +23,7 @@ type Metrics = { ingested: number; uniqueEvents: number; alertsSent: number; dup
   providerLatencyMs: Record<string, { total: number; count: number }> };
 export type ActorStance = { actor: string; storyKey: string; stance: string; changeType: ChangeType; updatedAt: string; sourceConfidence: number };
 export type MacroRelease = { release: string; actual?: string; consensus?: string; previous?: string; revision?: string; surprise?: "UP" | "DOWN" | "NEUTRAL"; timestamp: string; eventKey: string };
-export type MemoryEvent = { key: string; storyKey: string; fact: string; action: string; changeType: ChangeType; entities: string[]; sourceConfidence: number; eventTime: string; decision?: "SEND" | "DROP" | "REVIEW" };
+export type MemoryEvent = { key: string; storyKey: string; fact: string; action: string; changeType: ChangeType; entities: string[]; sourceConfidence: number; eventTime: string; decision?: "SEND" | "DROP" | "REVIEW"; provenance?: NewsArticle["sourceMeta"] };
 export type CandidateMemoryQuarantine = { quarantinedAt: string; reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION"; original: MemoryEvent };
 export type AlertMemory = { eventKey: string; storyKey: string; delta: number; verification: string; sentAt: string; message?: string };
 export type MarketMemoryPack = {
@@ -51,7 +51,8 @@ function identityKeys(article: NewsArticle): string[] {
   const identity = article.postId || article.providerId || article.url;
   const content = `${article.title} ${article.summary}`.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9]+/g, " ").trim();
   const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-  return [digest(`id|${source}|${author}|${identity}|${digest(content)}`), digest(`content|${source}|${author}|${content}`)];
+  const version = article.sourceMeta?.updatedAt ?? "";
+  return [digest(`id|${source}|${author}|${identity}|${version}|${digest(content)}`), digest(`content|${source}|${author}|${content}`)];
 }
 
 export class IntelligenceStore {
@@ -106,6 +107,7 @@ export class IntelligenceStore {
     this.data.memoryEvents ??= {};
     this.data.memoryEvents[event.key] = { key: event.key, storyKey: event.storyKey, fact: event.fact, action: event.action,
       changeType: event.changeType, entities: event.entities, sourceConfidence: event.sourceConfidence, eventTime: event.eventTime };
+    this.data.memoryEvents[event.key]!.provenance = article.sourceMeta;
     // Tier-3 noise never becomes canonical story/stance memory. It remains a rejected-candidate record only.
     if (event.sourceTier <= 2 && event.causalChannel) {
       this.data.stories[event.storyKey] = { key: event.storyKey, lastAction: event.action, lastFact: event.fact,
