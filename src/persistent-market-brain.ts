@@ -26,11 +26,12 @@ export type PersistentMarketBrain = {
   shadow: ShadowDecision[];
   experiences: MarketExperience[];
   providerHealth: Record<string, { configured: boolean; lastFetchedAt?: string; lastLiveDataAt?: string; lastError?: string }>;
+  quarantine?: Record<string, { quarantinedAt: string; reason: string; original: EvidenceRecord }>;
   lastObserverAt?: string;
 };
 
 export function emptyBrain(now = new Date().toISOString()): PersistentMarketBrain {
-  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {} };
+  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {} };
 }
 
 export function sessionAt(date: Date): string {

@@ -115,6 +115,7 @@ export class IntelligenceStore {
   }
   /** Store a relevant fact even when the production NEWS decision is DROP. */
   rememberEvidence(article: NewsArticle, event: EventAssessment, alerted: boolean): void {
+    if (!this.memoryRelevant(event)) return;
     const brain = this.data.brain ??= emptyBrain();
     const { stateKey, subtopic } = classifyEvidence(event.storyKey, event.fact);
     const id = event.key;
@@ -127,6 +128,23 @@ export class IntelligenceStore {
     brain.evidence[id] = record;
     if (event.sourceTier <= 2 && event.informationDelta > 0) brain.states[stateKey] = record;
     this.save();
+  }
+  /** Broad memory is allowed, but it must still have an evidenced market channel. */
+  private memoryRelevant(event: EventAssessment): boolean {
+    if (event.causalChannel) return true;
+    const structural = /china.*(gold|shanghai|etf|import)|gold.*(china|etf|central bank|comex|physical premium|india)|central bank.*gold/i.test(event.fact);
+    return structural || /^(fed-policy|us-macro-|iran-gulf-conflict|oil-supply|trade-sanctions|china-gold|structural-gold|treasury-|fx-)/.test(event.storyKey);
+  }
+  /** Deterministic, reversible cleanup: quarantine only records with no valid market topic or channel. */
+  quarantineIrrelevantEvidence(): number {
+    const brain = this.data.brain ??= emptyBrain(); brain.quarantine ??= {};
+    let count = 0;
+    for (const [id, record] of Object.entries(brain.evidence)) {
+      const eligible = /^(fed-policy|us-macro-|iran-gulf-conflict|oil-supply|trade-sanctions|china-gold|structural-gold|treasury-|fx-)/.test(record.topic) ||
+        /gold|xau|fed|fomc|inflation|yield|treasury|dxy|dollar|oil|crude|brent|wti|hormuz|iran|sanction|tariff|macro|central bank|etf|comex|physical/i.test(`${record.topic} ${record.subtopic} ${record.facts}`);
+      if (!eligible) { brain.quarantine[id] = { quarantinedAt: new Date().toISOString(), reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION", original: record }; delete brain.evidence[id]; count++; }
+    }
+    if (count) this.save(); return count;
   }
   recordMarketSnapshot(snapshot: MarketPoint): void {
     const brain = this.data.brain ??= emptyBrain(); brain.snapshots.push(snapshot);

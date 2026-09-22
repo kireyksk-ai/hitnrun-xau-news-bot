@@ -30,3 +30,16 @@ test("shadow records and market experiences are retained without NEWS routing", 
   assert.equal(store.marketBrain().shadow[0].attribution, "DRIVER_UNKNOWN");
   assert.equal(store.similarExperiences("UNCLEAR", "UNEXPLAINED_MOVE").length, 1);
 });
+test("generic earnings, real estate and AI disputes never enter persistent memory", () => {
+  const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "brain-")), "state.json"));
+  for (const title of ["Serabi Gold Q2 earnings rise", "Stewards terminates real estate acquisition", "Amazon blocks Meta AI shopping agent"]) {
+    const a = article(title); store.rememberEvidence(a, assessEvent(a), false);
+  }
+  assert.equal(Object.keys(store.marketBrain().evidence).length, 0);
+});
+test("deterministic cleanup quarantines legacy noise without deleting it", () => {
+  const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "brain-")), "state.json"));
+  const a = article("Amazon blocks Meta AI shopping agent"); const e = assessEvent(a);
+  const brain = store.marketBrain(); brain.evidence[e.key] = { id: e.key, timestamp: new Date().toISOString(), topic: "other-noise", subtopic: "event", facts: a.title, entities: [], provider: "fixture", sourceTier: 2, verification: "RELIABLE_WIRE", delta: "NEW_INFORMATION", alertDecision: "MEMORY_ONLY" };
+  assert.equal(store.quarantineIrrelevantEvidence(), 1); assert.equal(Object.keys(store.marketBrain().evidence).length, 0); assert.ok(store.marketBrain().quarantine[e.key]);
+});
