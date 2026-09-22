@@ -219,7 +219,7 @@ export class IntelligenceStore {
     brain.shadow.splice(0, Math.max(0, brain.shadow.length - 1_000)); this.save();
   }
   recordExperience(experience: MarketExperience): void {
-    const brain = this.data.brain ??= emptyBrain(); brain.experiences.push(experience);
+    const brain = this.data.brain ??= emptyBrain(); if (brain.experiences.some((item) => item.id === experience.id)) return; brain.experiences.push(experience);
     brain.experiences.splice(0, Math.max(0, brain.experiences.length - 500)); this.save();
   }
   /** Versioned shadow evidence only; no method here participates in NEWS routing. */
