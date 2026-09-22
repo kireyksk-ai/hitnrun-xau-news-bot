@@ -24,6 +24,7 @@ type Metrics = { ingested: number; uniqueEvents: number; alertsSent: number; dup
 export type ActorStance = { actor: string; storyKey: string; stance: string; changeType: ChangeType; updatedAt: string; sourceConfidence: number };
 export type MacroRelease = { release: string; actual?: string; consensus?: string; previous?: string; revision?: string; surprise?: "UP" | "DOWN" | "NEUTRAL"; timestamp: string; eventKey: string };
 export type MemoryEvent = { key: string; storyKey: string; fact: string; action: string; changeType: ChangeType; entities: string[]; sourceConfidence: number; eventTime: string; decision?: "SEND" | "DROP" | "REVIEW" };
+export type CandidateMemoryQuarantine = { quarantinedAt: string; reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION"; original: MemoryEvent };
 export type AlertMemory = { eventKey: string; storyKey: string; delta: number; verification: string; sentAt: string; message?: string };
 export type MarketMemoryPack = {
   currentEvent: { verifiedFacts: string; sourceConfidence: number; eventTime: string; changeType: ChangeType };
@@ -40,7 +41,7 @@ const emptyMetrics = (): Metrics => ({ ingested: 0, uniqueEvents: 0, alertsSent:
   latencyTotalMs: 0, latencyCount: 0, providerLatencyMs: {} });
 type Data = { records: Record<string, ReviewRecord>; stories: Record<string, StoryState>; metrics: Record<string, Metrics>;
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
-  memoryEvents?: Record<string, MemoryEvent>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
+  memoryEvents?: Record<string, MemoryEvent>; candidateMemoryQuarantine?: Record<string, CandidateMemoryQuarantine>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
   alerts?: Record<string, AlertMemory>; marketSnapshot?: { text: string; capturedAt: string };
   safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string; schemaVersion?: number; brain?: PersistentMarketBrain };
 
@@ -101,6 +102,7 @@ export class IntelligenceStore {
   getStory(key: string): StoryState | undefined { return this.data.stories[key]; }
   /** Persist a compact, market-only observation before any expensive AI work. */
   observeMarketEvent(article: NewsArticle, event: EventAssessment): void {
+    if (!this.candidateMemoryRelevant(event)) return;
     this.data.memoryEvents ??= {};
     this.data.memoryEvents[event.key] = { key: event.key, storyKey: event.storyKey, fact: event.fact, action: event.action,
       changeType: event.changeType, entities: event.entities, sourceConfidence: event.sourceConfidence, eventTime: event.eventTime };
@@ -132,8 +134,38 @@ export class IntelligenceStore {
   /** Broad memory is allowed, but it must still have an evidenced market channel. */
   private memoryRelevant(event: EventAssessment): boolean {
     if (event.causalChannel) return true;
-    const structural = /china.*(gold|shanghai|etf|import)|gold.*(china|etf|central bank|comex|physical premium|india)|central bank.*gold/i.test(event.fact);
-    return structural || /^(fed-policy|us-macro-|iran-gulf-conflict|oil-supply|trade-sanctions|china-gold|structural-gold|treasury-|fx-)/.test(event.storyKey);
+    return this.memoryRelevantText(event.storyKey, event.fact);
+  }
+  private memoryRelevantText(storyKey: string, fact: string): boolean {
+    const structural = /china.*(gold|shanghai|etf|import)|gold.*(china|etf|central bank|comex|physical premium|india)|central bank.*gold/i.test(fact);
+    return structural || /^(fed-policy|us-macro-|iran-gulf-conflict|oil-supply|trade-sanctions|china-gold|structural-gold|treasury-|fx-)/.test(storyKey);
+  }
+  /** Candidate memory additionally retains explicit cross-asset state observations without widening active evidence. */
+  private candidateMemoryRelevant(event: EventAssessment): boolean {
+    return this.memoryRelevant(event) || this.candidateMemoryRelevantText(event.storyKey, event.fact);
+  }
+  private candidateMemoryRelevantText(storyKey: string, fact: string): boolean {
+    return this.memoryRelevantText(storyKey, fact) || /\b(treasury|yield|yields|bond|auction|real yield|dxy|dollar|fx|eurusd|gbpjpy)\b/i.test(fact);
+  }
+  /** Legacy candidate cleanup is deliberately narrow: uncertain non-market records stay auditable. */
+  private clearlyIrrelevantCandidate(record: MemoryEvent): boolean {
+    if (this.candidateMemoryRelevantText(record.storyKey, record.fact)) return false;
+    if (!record.storyKey.startsWith("other-")) return false;
+    const text = `${record.fact} ${record.action}`.toLowerCase();
+    return /\b(earnings|quarterly results|laboratory|dating site|dating app|marriage-focused|real estate acquisition|ai shopping agent)\b/.test(text) ||
+      /\b(deepseek|anthropic)\b.*\b(data leak|data leaks|user data|user-data|routing)\b/.test(text);
+  }
+  /** Move only clear legacy candidate noise to an auditable quarantine; never delete it. */
+  quarantineIrrelevantCandidateMemory(): number {
+    const candidates = Object.entries(this.data.memoryEvents ?? {}).filter(([, record]) => this.clearlyIrrelevantCandidate(record));
+    if (!candidates.length) return 0;
+    if (existsSync(this.path)) copyFileSync(this.path, `${this.path}.backup-pre-candidate-memory-cleanup-${Date.now()}`);
+    this.data.candidateMemoryQuarantine ??= {};
+    for (const [id, record] of candidates) {
+      this.data.candidateMemoryQuarantine[id] = { quarantinedAt: new Date().toISOString(), reason: "NO_PLAUSIBLE_MARKET_TRANSMISSION", original: record };
+      delete this.data.memoryEvents![id];
+    }
+    this.save(); return candidates.length;
   }
   /** Deterministic, reversible cleanup: quarantine only records with no valid market topic or channel. */
   quarantineIrrelevantEvidence(): number {

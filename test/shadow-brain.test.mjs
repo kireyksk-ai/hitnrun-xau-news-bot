@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IntelligenceStore } from "../dist/intelligence-store.js";
@@ -43,4 +43,39 @@ test("deterministic cleanup quarantines legacy noise without deleting it", () =>
   const brain = store.marketBrain(); brain.evidence[e.key] = { id: e.key, timestamp: new Date().toISOString(), topic: "other-noise", subtopic: "event", facts: a.title, entities: [], provider: "fixture", sourceTier: 2, verification: "RELIABLE_WIRE", delta: "NEW_INFORMATION", alertDecision: "MEMORY_ONLY" };
   assert.equal(store.quarantineIrrelevantEvidence(), 1); assert.equal(Object.keys(store.marketBrain().evidence).length, 0); assert.ok(store.marketBrain().quarantine[e.key]);
   assert.ok(readdirSync(dir).some((name) => name.includes("backup-pre-memory-cleanup-")));
+});
+test("candidate memory gate rejects corporate noise but retains market-only candidates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "brain-")); const path = join(dir, "state.json"); const store = new IntelligenceStore(path);
+  for (const title of ["Generic company quarterly earnings rise", "Castle Biosciences opens laboratory", "Match Group relaunches dating site", "DeepSeek and Anthropic dispute user-data routing"]) {
+    const a = article(title); store.observeMarketEvent(a, assessEvent(a));
+  }
+  assert.equal(Object.keys(JSON.parse(readFileSync(path, "utf8")).memoryEvents ?? {}).length, 0);
+  for (const title of ["Fed Goolsbee says inflation remains too high", "US CPI below consensus", "US PCE below consensus", "US NFP exceeds consensus", "FOMC holds rates steady", "Treasury yields rise after auction", "Hormuz disruption cuts oil shipments", "Trump announces new tariffs and Iran sanctions"]) {
+    const a = article(title); store.observeMarketEvent(a, assessEvent(a));
+  }
+  const candidates = Object.values(JSON.parse(readFileSync(path, "utf8")).memoryEvents ?? {});
+  assert.equal(candidates.length, 8);
+  const lowMaterial = article("Fed Goolsbee repeats inflation remains too high"); const lowEvent = assessEvent(lowMaterial);
+  store.rememberEvidence(lowMaterial, lowEvent, false);
+  assert.equal(store.marketBrain().evidence[lowEvent.key].alertDecision, "MEMORY_ONLY");
+});
+test("legacy candidate cleanup quarantines only clear noise and keeps uncertain candidates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "brain-")); const path = join(dir, "state.json"); new IntelligenceStore(path);
+  const data = JSON.parse(readFileSync(path, "utf8"));
+  const candidate = (key, fact) => ({ key, storyKey: `other-${key}`, fact, action: "reported", changeType: "NEW_INFORMATION", entities: [], sourceConfidence: 60, eventTime: "2026-09-22T00:00:00.000Z" });
+  data.memoryEvents = {
+    earnings: candidate("earnings", "Generic company quarterly earnings rise"),
+    lab: candidate("lab", "Castle Biosciences opens laboratory"),
+    dating: candidate("dating", "Match Group relaunches dating site"),
+    ai: candidate("ai", "DeepSeek and Anthropic dispute user-data routing"),
+    uncertain: candidate("uncertain", "China considers strategic technology export controls after diplomatic escalation")
+  };
+  writeFileSync(path, JSON.stringify(data));
+  const store = new IntelligenceStore(path);
+  assert.equal(store.quarantineIrrelevantCandidateMemory(), 4);
+  const result = JSON.parse(readFileSync(path, "utf8"));
+  assert.deepEqual(Object.keys(result.memoryEvents), ["uncertain"]);
+  assert.equal(Object.keys(result.candidateMemoryQuarantine).length, 4);
+  assert.equal(result.candidateMemoryQuarantine.ai.reason, "NO_PLAUSIBLE_MARKET_TRANSMISSION");
+  assert.ok(readdirSync(dir).some((name) => name.includes("backup-pre-candidate-memory-cleanup-")));
 });
