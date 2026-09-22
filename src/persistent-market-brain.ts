@@ -2,7 +2,7 @@
  * Phase 1-4 state only.  Nothing in this module can change NEWS routing.
  * Records contain evidence and conclusions, never model reasoning traces.
  */
-export const MARKET_BRAIN_SCHEMA_VERSION = 5;
+export const MARKET_BRAIN_SCHEMA_VERSION = 6;
 
 export type EvidenceRecord = {
   id: string; timestamp: string; topic: string; subtopic: string; facts: string;
@@ -46,10 +46,11 @@ export type PersistentMarketBrain = {
   lastObserverAt?: string;
   quantitative?: import("./quantitative.js").QuantitativeState;
   causal?: { graphs: Record<string, import("./causal-intelligence.js").CausalGraph>; investigations: import("./causal-intelligence.js").AbnormalInvestigation[] };
+  checkpoints?: import("./delayed-outcomes.js").Checkpoint[];
 };
 
 export function emptyBrain(now = new Date().toISOString()): PersistentMarketBrain {
-  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {}, quantitative: { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }, causal:{graphs:{},investigations:[]} };
+  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {}, quantitative: { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }, causal:{graphs:{},investigations:[]},checkpoints:[] };
 }
 
 export function sessionAt(date: Date): "ASIA" | "LONDON" | "NEW_YORK" | "LONDON_NEW_YORK_OVERLAP" | "ROLLOVER_TRANSITION" {

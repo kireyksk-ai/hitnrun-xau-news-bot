@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { IntelligenceStore } from "./intelligence-store.js";
 import { anatomy, type Candle } from "./market-tape.js";
 import { sessionAt, type DataQuality, type MarketPoint, type ShadowDecision } from "./persistent-market-brain.js";
+import { complete } from "./delayed-outcomes.js";
 
 const universe = [
   ["XAUUSD", "GC=F"], ["DXY", "DX-Y.NYB"], ["EURUSD", "EURUSD=X"], ["USDJPY", "JPY=X"], ["GBPUSD", "GBPUSD=X"], ["GBPJPY", "GBPJPY=X"],
@@ -43,6 +44,8 @@ export async function observeMarket(store: IntelligenceStore): Promise<{ point: 
   for (const [instrument, value] of Object.entries(values)) store.recordQuantObservation({ instrument, value: value.price,
     observedAt: value.observedAt ?? point.capturedAt, availableAt: point.capturedAt, source: value.source ?? "Yahoo Finance chart API",
     freshness: value.quality ?? "DATA_UNAVAILABLE", quality: value.quality ?? "DATA_UNAVAILABLE", revision: "ORIGINAL" });
+  const previousPoint=store.marketBrain().snapshots.at(-2), previousXau=previousPoint?.values.XAUUSD;
+  for(const checkpoint of store.dueCheckpoints(point.capturedAt)) store.updateCheckpoint(complete(checkpoint,point.capturedAt,{xauChange:xauChange(previousXau?.price,values.XAUUSD?.price),dxyChange:xauChange(previousPoint?.values.DXY?.price,values.DXY?.price),yieldChange:xauChange(previousPoint?.values.US10Y?.price,values.US10Y?.price),oilChange:xauChange(previousPoint?.values.WTI?.price,values.WTI?.price),session:point.session},values.XAUUSD?.quality??"DATA_UNAVAILABLE"));
   const xau = values.XAUUSD, dxy = values.DXY, y10 = values.US10Y, wti = values.WTI;
   const previous = store.marketBrain().snapshots.at(-2);
   let kind: ShadowDecision["kind"] = "CONSISTENT";
@@ -60,3 +63,4 @@ export async function observeMarket(store: IntelligenceStore): Promise<{ point: 
   if (kind !== "CONSISTENT") store.recordExperience({ id: createHash("sha256").update(`${now.toISOString()}|${kind}`).digest("hex").slice(0, 16), createdAt: now.toISOString(), regime: store.regime, trigger: kind, attribution, confidence: decision.confidence });
   return { point, decision };
 }
+function xauChange(previous?:number,current?:number):number|undefined{return previous&&current?(current-previous)/previous*100:undefined;}

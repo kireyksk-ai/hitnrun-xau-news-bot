@@ -6,6 +6,7 @@ import type { ChangeType, EventAssessment, StoryState } from "./event-intelligen
 import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
 import type { DriftRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
 import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.js";
+import type { Checkpoint } from "./delayed-outcomes.js";
 
 export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
@@ -73,6 +74,7 @@ export class IntelligenceStore {
     } else this.data.brain ??= emptyBrain();
     this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] };
     this.data.brain.causal ??= { graphs:{}, investigations:[] };
+    this.data.brain.checkpoints ??= [];
   }
   private save(): void { writeFileSync(this.path, JSON.stringify(this.data), "utf8"); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
@@ -232,6 +234,11 @@ export class IntelligenceStore {
   causalGraphs(): Record<string,CausalGraph> { return ((this.data.brain ??= emptyBrain()).causal ??= {graphs:{},investigations:[]}).graphs; }
   recordCausalGraph(graph:CausalGraph): void { this.causalGraphs()[graph.storyId]=graph; this.save(); }
   recordInvestigation(item:AbnormalInvestigation):void { const c=(this.data.brain ??=emptyBrain()).causal ??= {graphs:{},investigations:[]};c.investigations.push(item);c.investigations.splice(0,Math.max(0,c.investigations.length-500));this.save(); }
+  checkpoints():Checkpoint[]{return (this.data.brain ??=emptyBrain()).checkpoints ??=[];}
+  scheduleCheckpoint(item:Checkpoint):boolean{if(this.checkpoints().some(x=>x.id===item.id))return false;this.checkpoints().push(item);this.save();return true;}
+  updateCheckpoint(item:Checkpoint):void{const all=this.checkpoints(),i=all.findIndex(x=>x.id===item.id);if(i>=0){all[i]=item;this.save();}}
+  dueCheckpoints(now:string):Checkpoint[]{return this.checkpoints().filter(x=>(x.status==="PENDING"||x.status==="RETRY")&&x.scheduledAt<=now);}
+  shadowStatus():Record<string,unknown>{const b=this.marketBrain(),q=this.quantitative();return{schemaVersion:b.schemaVersion,phase5:"OFF",marketSnapshots:b.snapshots.length,marketData:b.snapshots.at(-1)?.coverage?.quality??"DATA_UNAVAILABLE",providers:b.providerHealth,activeStories:Object.keys(this.data.stories).length,pendingCheckpoints:this.checkpoints().filter(x=>x.status==="PENDING").length,completedCheckpoints:this.checkpoints().filter(x=>x.status==="COMPLETED").length,experiences:b.experiences.length,causalGraphs:Object.keys(b.causal?.graphs??{}).length,quantModels:q.models.length,noEdge:q.relationships.filter(x=>x.state==="NO_EDGE_FOUND").length,quarantine:Object.keys(b.quarantine??{}).length};}
   similarExperiences(regime: string, trigger: string): MarketExperience[] {
     return (this.data.brain?.experiences ?? []).filter((item) => item.regime === regime || item.trigger === trigger).slice(-5);
   }

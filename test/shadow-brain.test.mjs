@@ -12,7 +12,7 @@ test("phase one migrates old state with backup and persists memory-only evidence
   const dir = mkdtempSync(join(tmpdir(), "brain-")); const path = join(dir, "state.json");
   writeFileSync(path, JSON.stringify({ records: {}, stories: {}, metrics: {}, safeMode: false, updateOffset: 0, regime: "UNCLEAR" }));
   const store = new IntelligenceStore(path); const a = article("China gold imports exceed 1,000 tonnes through August"); const e = assessEvent(a);
-  store.rememberEvidence(a, e, false); assert.equal(store.marketBrain().schemaVersion, 5);
+  store.rememberEvidence(a, e, false); assert.equal(store.marketBrain().schemaVersion, 6);
   assert.equal(store.marketBrain().states["china-gold-market"].alertDecision, "MEMORY_ONLY");
   assert.ok(new IntelligenceStore(path).marketBrain().evidence[e.key]);
 });
