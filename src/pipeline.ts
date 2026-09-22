@@ -38,6 +38,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   if (!shouldReview(event, prior)) {
     record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason: "HARD_FILTER_REJECT: Importance/delta below threshold", audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
     deps.store.observeMarketEvent(article, event);
+    deps.store.rememberEvidence(article, event, false);
     deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected"); return record;
   }
   let enriched = article;
@@ -63,6 +64,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
       shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
       audit: { ...auditBase, aiCalled: true, schema: "INVALID", repairAttempted: true, fallbackAttempted: true, outcome: "AI_CONTRACT_FAILURE" } };
     deps.store.record(record);
+    deps.store.rememberEvidence(article, event, false);
     // Do not mark processed: a later independent provider can re-evaluate it.
     return record;
   }
@@ -83,6 +85,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   }
   if (!publish) {
     deps.store.record(record); deps.store.markProcessedIdentity(article, event.key);
+    deps.store.rememberEvidence(article, event, false);
     deps.store.increment("lowValueRejected");
     return record;
   }
@@ -120,6 +123,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
       deps.store.markProcessedIdentity(article, event.key);
       deps.store.markDeliveredIdentity(article, event.key);
       deps.store.rememberStory(event, true);
+      deps.store.rememberEvidence(article, event, true);
       deps.store.increment("alertsSent");
       deps.store.deliveryLatency(Math.max(0, (deps.now?.() ?? new Date()).getTime() - now.getTime()));
     }

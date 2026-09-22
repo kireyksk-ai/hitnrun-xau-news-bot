@@ -36,6 +36,8 @@ const schema = z.object({
     TRUTH_SOCIAL_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
     TRUTH_SOCIAL_POLL_SECONDS: z.coerce.number().int().min(15).default(15),
     MAX_ARTICLE_AGE_MINUTES: z.coerce.number().int().min(1).default(45),
+    // Shadow-only observer. It never participates in NEWS routing before Phase 5.
+    MARKET_OBSERVER_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
     SQLITE_PATH: z.string().default("./data/bot.sqlite"),
     LOG_LEVEL: z.string().default("info")
 });

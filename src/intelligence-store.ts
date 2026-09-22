@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
+import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
 
 export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
@@ -41,7 +42,7 @@ type Data = { records: Record<string, ReviewRecord>; stories: Record<string, Sto
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
   memoryEvents?: Record<string, MemoryEvent>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
   alerts?: Record<string, AlertMemory>; marketSnapshot?: { text: string; capturedAt: string };
-  safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string };
+  safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string; schemaVersion?: number; brain?: PersistentMarketBrain };
 
 function identityKeys(article: NewsArticle): string[] {
   const source = (article.sourceName || article.provider).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -56,8 +57,16 @@ export class IntelligenceStore {
   private data: Data;
   constructor(private readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.data = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Data :
+    const exists = existsSync(path);
+    this.data = exists ? JSON.parse(readFileSync(path, "utf8")) as Data :
       { records: {}, stories: {}, metrics: {}, safeMode: false, updateOffset: 0, regime: "UNCLEAR" };
+    // Versioned, non-destructive migration: retain the complete old JSON beside state.
+    if ((this.data.schemaVersion ?? 1) < MARKET_BRAIN_SCHEMA_VERSION) {
+      if (exists) copyFileSync(path, `${path}.backup-v${this.data.schemaVersion ?? 1}`);
+      this.data.schemaVersion = MARKET_BRAIN_SCHEMA_VERSION;
+      this.data.brain = this.data.brain ?? emptyBrain();
+      this.save();
+    } else this.data.brain ??= emptyBrain();
   }
   private save(): void { writeFileSync(this.path, JSON.stringify(this.data), "utf8"); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
@@ -104,6 +113,46 @@ export class IntelligenceStore {
     }
     this.save();
   }
+  /** Store a relevant fact even when the production NEWS decision is DROP. */
+  rememberEvidence(article: NewsArticle, event: EventAssessment, alerted: boolean): void {
+    const brain = this.data.brain ??= emptyBrain();
+    const { stateKey, subtopic } = classifyEvidence(event.storyKey, event.fact);
+    const id = event.key;
+    const record = { id, timestamp: new Date().toISOString(), topic: event.storyKey, subtopic, facts: event.fact,
+      entities: event.entities, provider: article.provider, sourceTier: event.sourceTier,
+      verification: event.sourceTier === 1 ? "OFFICIAL" : event.sourceTier === 2 ? "RELIABLE_WIRE" : "UNCONFIRMED",
+      eventId: event.key, storyId: event.storyKey,
+      delta: event.informationDelta === 0 ? "CONFIRMATION" : event.changeType,
+      alertDecision: alerted ? "SENT" : "MEMORY_ONLY" } as const;
+    brain.evidence[id] = record;
+    if (event.sourceTier <= 2 && event.informationDelta > 0) brain.states[stateKey] = record;
+    this.save();
+  }
+  recordMarketSnapshot(snapshot: MarketPoint): void {
+    const brain = this.data.brain ??= emptyBrain(); brain.snapshots.push(snapshot);
+    // Keep compact bars, never high-frequency raw tick history.
+    brain.snapshots.splice(0, Math.max(0, brain.snapshots.length - 2_016)); this.save();
+  }
+  recordShadow(decision: ShadowDecision): void {
+    const brain = this.data.brain ??= emptyBrain(); brain.shadow.push(decision);
+    brain.shadow.splice(0, Math.max(0, brain.shadow.length - 1_000)); this.save();
+  }
+  recordExperience(experience: MarketExperience): void {
+    const brain = this.data.brain ??= emptyBrain(); brain.experiences.push(experience);
+    brain.experiences.splice(0, Math.max(0, brain.experiences.length - 500)); this.save();
+  }
+  similarExperiences(regime: string, trigger: string): MarketExperience[] {
+    return (this.data.brain?.experiences ?? []).filter((item) => item.regime === regime || item.trigger === trigger).slice(-5);
+  }
+  markProvider(provider: string, status: "CONFIGURED" | "FETCHED" | "LIVE" | "ERROR", detail?: string): void {
+    const health = (this.data.brain ??= emptyBrain()).providerHealth[provider] ??= { configured: false };
+    if (status === "CONFIGURED") health.configured = true;
+    if (status === "FETCHED") health.lastFetchedAt = new Date().toISOString();
+    if (status === "LIVE") health.lastLiveDataAt = new Date().toISOString();
+    if (status === "ERROR") health.lastError = detail ?? "provider error";
+    this.save();
+  }
+  marketBrain(): PersistentMarketBrain { return this.data.brain ??= emptyBrain(); }
   private rememberActorStances(article: NewsArticle, event: EventAssessment): void {
     const text = `${article.title} ${article.summary}`.toLowerCase();
     const actors = ["donald trump", "trump", "powell", "warsh", "goolsbee", "waller", "bessent", "fed", "fomc"]

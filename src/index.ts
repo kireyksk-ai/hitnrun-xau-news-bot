@@ -4,6 +4,7 @@ import { Editor } from "./editor.js";
 import { IntelligenceStore } from "./intelligence-store.js";
 import { processArticle } from "./pipeline.js";
 import { marketSnapshot } from "./market-snapshot.js";
+import { observeMarket } from "./market-observer.js";
 import { validateNewsOutput } from "./news-output.js";
 import { GoogleNewsRssProvider } from "./providers/google-news-rss.js";
 import { GNewsDailyLimitError, GNewsProvider } from "./providers/gnews.js";
@@ -34,6 +35,7 @@ const providers: NewsProvider[] = [
 ];
 if (!providers.length) throw new Error("No news provider configured");
 const store = new IntelligenceStore(`${config.SQLITE_PATH}.intelligence.json`);
+for (const provider of providers) store.markProvider(provider.name, "CONFIGURED");
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
 const discoveredDestination = config.TELEGRAM_CHAT_ID ? undefined : await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
 const destinations: TelegramDestination[] = [
@@ -43,6 +45,7 @@ const destinations: TelegramDestination[] = [
 const lastPolledAt = new Map<string, number>();
 const pausedUntil = new Map<string, number>();
 let aiDay = "", aiCount = 0, ticking = false, adminPolling = false;
+let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
 
 function aiAllowed(): boolean {
@@ -135,6 +138,12 @@ async function tick(): Promise<void> {
   if (ticking) return; ticking = true;
   try {
     await pollAdmin(); await adminReport();
+    // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
+    if (Date.now() - lastMarketObservationAt >= config.MARKET_OBSERVER_INTERVAL_SECONDS * 1000) {
+      lastMarketObservationAt = Date.now();
+      try { const observed = await observeMarket(store); log.info({ kind: observed.decision.kind, attribution: observed.decision.attribution, assets: Object.keys(observed.point.values).length }, "Shadow market observer completed"); }
+      catch (error) { log.warn({ err: error }, "Shadow market observer failed"); }
+    }
     const since = new Date(Date.now() - config.MAX_ARTICLE_AGE_MINUTES * 60000);
     for (const provider of providers) {
       const now = Date.now();
@@ -143,6 +152,8 @@ async function tick(): Promise<void> {
       lastPolledAt.set(provider.name, now);
       try {
         const articles = await provider.fetchLatest(since);
+        store.markProvider(provider.name, "FETCHED");
+        if (articles.length) store.markProvider(provider.name, "LIVE");
         store.providerLatency(provider.name, Date.now() - now);
         for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
           const result = await processArticle(article, {
@@ -156,6 +167,7 @@ async function tick(): Promise<void> {
         }
       } catch (error) {
         store.increment("providerFailures");
+        store.markProvider(provider.name, "ERROR", error instanceof Error ? error.message : "unknown error");
         if (error instanceof GNewsDailyLimitError || error instanceof MarketauxDailyLimitError) {
           const midnight = new Date(); midnight.setUTCHours(24, 0, 0, 0); pausedUntil.set(provider.name, midnight.getTime());
         }
