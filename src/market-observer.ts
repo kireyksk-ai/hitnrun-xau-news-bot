@@ -3,6 +3,7 @@ import type { IntelligenceStore } from "./intelligence-store.js";
 import { anatomy, type Candle } from "./market-tape.js";
 import { sessionAt, type DataQuality, type MarketPoint, type ShadowDecision } from "./persistent-market-brain.js";
 import { complete } from "./delayed-outcomes.js";
+import { runLearningLoop } from "./learning-loop.js";
 
 const universe = [
   ["XAUUSD", "GC=F"], ["DXY", "DX-Y.NYB"], ["EURUSD", "EURUSD=X"], ["USDJPY", "JPY=X"], ["GBPUSD", "GBPUSD=X"], ["GBPJPY", "GBPJPY=X"],
@@ -39,6 +40,7 @@ export async function observeMarket(store: IntelligenceStore): Promise<{ point: 
     candles: xauCandle ? { "5m": anatomy(xauCandle) } : undefined,
     coverage: { available: completed.length, requested: universe.length, quality } };
   store.recordMarketSnapshot(point);
+  if (store.marketBrain().snapshots.length % 12 === 0) runLearningLoop(store, point.capturedAt);
   // The same point-in-time market tape is the only source for quantitative rows;
   // it is retained with provenance rather than reconstructed later.
   for (const [instrument, value] of Object.entries(values)) store.recordQuantObservation({ instrument, value: value.price,
