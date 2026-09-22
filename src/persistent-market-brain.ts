@@ -32,7 +32,7 @@ export type ShadowDecision = {
   attribution: "CONFIRMED_DRIVER" | "LIKELY_DRIVER" | "POSSIBLE_DRIVER" | "MULTIPLE_COMPETING_DRIVERS" | "INSUFFICIENT_EVIDENCE" | "DRIVER_UNKNOWN";
   facts: string[]; channels: string[]; confidence: number; productionDecision?: string;
 };
-export type MarketExperience = { id: string; createdAt: string; regime: string; trigger: string; marketSnapshotId?: string; attribution: ShadowDecision["attribution"]; confidence: number; outcome?: string; quantitative?: { modelId?:string; modelVersion?:number; residual?:number; relationshipState?:string; positioningState?:string; sampleSize?:number; stability?:string; sourceReputationState?:string; scorecardId?:string } };
+export type MarketExperience = { id: string; createdAt: string; regime: string; trigger: string; marketSnapshotId?: string; attribution: ShadowDecision["attribution"]; confidence: number; outcome?: string; checkpoint?: import("./delayed-outcomes.js").Checkpoint; quantitative?: { modelId?:string; modelVersion?:number; residual?:number; relationshipState?:string; positioningState?:string; sampleSize?:number; stability?:string; sourceReputationState?:string; scorecardId?:string } };
 export type PersistentMarketBrain = {
   schemaVersion: number;
   migratedAt: string;

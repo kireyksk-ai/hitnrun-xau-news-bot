@@ -6,7 +6,7 @@ import { IntelligenceStore } from "./intelligence-store.js";
 import type { ReviewRecord } from "./intelligence-store.js";
 import { AIContractFailure } from "./editor.js";
 import { channel, synthesize } from "./causal-intelligence.js";
-import { schedule } from "./delayed-outcomes.js";
+import { policy, schedule } from "./delayed-outcomes.js";
 
 export type PipelineDeps = {
   store: IntelligenceStore;
@@ -63,7 +63,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.recordCausalGraph({ storyId:event.storyKey, createdAt:nowIso, updatedAt:nowIso, attribution:synthesis.attribution, channels,
       corrections:[], conflicts:event.sourceTier > 2 ? ["Single tier-three source"] : [], narrative:{known:[event.fact], changed:event.changeType,
       uncertain:event.sourceTier > 2 ? ["Independent corroboration required"] : [], active:channels.map(item=>item.id), contradicted:[], horizons:["INTRADAY"], latest:event.fact, limitations:[]} });
-    for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,"INTRADAY")) deps.store.scheduleCheckpoint(checkpoint);
+    for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey)) deps.store.scheduleCheckpoint(checkpoint);
   }
 
   let primary: EditorialDecision | undefined;
