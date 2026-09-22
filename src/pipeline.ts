@@ -56,6 +56,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // and competing channels only; it cannot alter the existing NEWS decision.
   if (event.causalChannel) {
     const nowIso = now.toISOString();
+    const previousGraph = deps.store.causalGraphs()[event.storyKey];
     const channels = (event.transmissionChannels.length ? event.transmissionChannels : [event.causalChannel]).map((name, index) =>
       channel(`${event.key}:${index}`, name, "XAU", index ? "SECOND_ORDER_EFFECT" : "FIRST_ORDER_EFFECT", "INTRADAY", nowIso,
         event.sourceTier <= 2 ? [event.fact] : [], event.sourceTier > 2 ? ["Independent corroboration required"] : []));
@@ -63,9 +64,10 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.recordCausalGraph({ storyId:event.storyKey, createdAt:nowIso, updatedAt:nowIso, attribution:synthesis.attribution, channels,
       corrections:[], conflicts:event.sourceTier > 2 ? ["Single tier-three source"] : [], narrative:{known:[event.fact], changed:event.changeType,
       uncertain:event.sourceTier > 2 ? ["Independent corroboration required"] : [], active:channels.map(item=>item.id), contradicted:[], horizons:["INTRADAY"], latest:event.fact, limitations:[]} });
+    if (/CORRECTION|DENIAL|REVERSAL/.test(String(event.changeType))) deps.store.recordCausalCorrection(event.storyKey,previousGraph?.attribution ?? "prior attribution",event.fact,"DRIVER_UNKNOWN",nowIso);
     const factualState = /CORRECTION|DENIAL|REVERSAL/.test(String(event.changeType)) ? "CORRECTED" : event.sourceTier <= 2 ? "CONFIRMED" : "UNRESOLVED";
     const actor = article.author ?? article.sourceMeta?.authorId;
-    for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey,{source:article.sourceName ?? article.provider,actor,factualState})) deps.store.scheduleCheckpoint(checkpoint);
+    for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey,{source:article.sourceName ?? article.provider,actor,factualState,causalReference:event.storyKey,causalGraphVersion:nowIso})) deps.store.scheduleCheckpoint(checkpoint);
   }
 
   let primary: EditorialDecision | undefined;
