@@ -48,7 +48,7 @@ type Data = { records: Record<string, ReviewRecord>; stories: Record<string, Sto
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
   memoryEvents?: Record<string, MemoryEvent>; candidateMemoryQuarantine?: Record<string, CandidateMemoryQuarantine>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
   alerts?: Record<string, AlertMemory>; marketSnapshot?: { text: string; capturedAt: string };
-  safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string; schemaVersion?: number; brain?: PersistentMarketBrain };
+  safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string; learningAlertStates?:Record<string,"OK"|"FAILURE">; schemaVersion?: number; brain?: PersistentMarketBrain };
 
 function identityKeys(article: NewsArticle): string[] {
   const source = (article.sourceName || article.provider).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -249,7 +249,7 @@ export class IntelligenceStore {
     const health = (this.data.brain ??= emptyBrain()).providerHealth[provider] ??= { configured: false };
     if (status === "CONFIGURED") health.configured = true;
     if (status === "FETCHED") health.lastFetchedAt = new Date().toISOString();
-    if (status === "LIVE") health.lastLiveDataAt = new Date().toISOString();
+    if (status === "LIVE") { health.lastLiveDataAt = new Date().toISOString(); delete health.lastError; }
     if (status === "ERROR") health.lastError = detail ?? "provider error";
     this.save();
   }
@@ -351,4 +351,6 @@ export class IntelligenceStore {
   }
   lastReportDay(): string | undefined { return this.data.lastReportDay; }
   setLastReportDay(day: string): void { this.data.lastReportDay = day; this.save(); }
+  learningAlertState(key:string):"OK"|"FAILURE"|undefined{return this.data.learningAlertStates?.[key];}
+  setLearningAlertState(key:string,state:"OK"|"FAILURE"):void{(this.data.learningAlertStates??={})[key]=state;this.save();}
 }
