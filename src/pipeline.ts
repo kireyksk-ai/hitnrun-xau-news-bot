@@ -63,7 +63,9 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.recordCausalGraph({ storyId:event.storyKey, createdAt:nowIso, updatedAt:nowIso, attribution:synthesis.attribution, channels,
       corrections:[], conflicts:event.sourceTier > 2 ? ["Single tier-three source"] : [], narrative:{known:[event.fact], changed:event.changeType,
       uncertain:event.sourceTier > 2 ? ["Independent corroboration required"] : [], active:channels.map(item=>item.id), contradicted:[], horizons:["INTRADAY"], latest:event.fact, limitations:[]} });
-    for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey)) deps.store.scheduleCheckpoint(checkpoint);
+    const factualState = /CORRECTION|DENIAL|REVERSAL/.test(String(event.changeType)) ? "CORRECTED" : event.sourceTier <= 2 ? "CONFIRMED" : "UNRESOLVED";
+    const actor = article.author ?? article.sourceMeta?.authorId;
+    for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey,{source:article.sourceName ?? article.provider,actor,factualState})) deps.store.scheduleCheckpoint(checkpoint);
   }
 
   let primary: EditorialDecision | undefined;
