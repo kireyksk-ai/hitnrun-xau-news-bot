@@ -46,15 +46,15 @@ test("deterministic cleanup quarantines legacy noise without deleting it", () =>
 });
 test("candidate memory gate rejects corporate noise but retains market-only candidates", () => {
   const dir = mkdtempSync(join(tmpdir(), "brain-")); const path = join(dir, "state.json"); const store = new IntelligenceStore(path);
-  for (const title of ["Generic company quarterly earnings rise", "Castle Biosciences opens laboratory", "Match Group relaunches dating site", "DeepSeek and Anthropic dispute user-data routing"]) {
+  for (const title of ["Generic company quarterly earnings rise", "Castle Biosciences opens laboratory", "Match Group relaunches dating site", "DeepSeek and Anthropic dispute user-data routing", "China probes DeepSeek Moonshot over data breaches", "AI company faces privacy and security investigation", "Generic company corporate litigation continues"]) {
     const a = article(title); store.observeMarketEvent(a, assessEvent(a));
   }
   assert.equal(Object.keys(JSON.parse(readFileSync(path, "utf8")).memoryEvents ?? {}).length, 0);
-  for (const title of ["Fed Goolsbee says inflation remains too high", "US CPI below consensus", "US PCE below consensus", "US NFP exceeds consensus", "FOMC holds rates steady", "Treasury yields rise after auction", "Hormuz disruption cuts oil shipments", "Trump announces new tariffs and Iran sanctions"]) {
+  for (const title of ["Fed Goolsbee says inflation remains too high", "US CPI below consensus", "US PCE below consensus", "US NFP exceeds consensus", "FOMC holds rates steady", "Treasury yields rise after auction", "Hormuz disruption cuts oil shipments", "Trump announces new tariffs and Iran sanctions", "China announces semiconductor export controls with material US China trade implications", "Sanctions target a major Chinese company with explicit trade and geopolitical implications", "Major bank liquidity stress spreads through credit markets", "Refinery shutdown disrupts oil energy supply"]) {
     const a = article(title); store.observeMarketEvent(a, assessEvent(a));
   }
   const candidates = Object.values(JSON.parse(readFileSync(path, "utf8")).memoryEvents ?? {});
-  assert.equal(candidates.length, 8);
+  assert.equal(candidates.length, 12);
   const lowMaterial = article("Fed Goolsbee repeats inflation remains too high"); const lowEvent = assessEvent(lowMaterial);
   store.rememberEvidence(lowMaterial, lowEvent, false);
   assert.equal(store.marketBrain().evidence[lowEvent.key].alertDecision, "MEMORY_ONLY");
@@ -68,14 +68,17 @@ test("legacy candidate cleanup quarantines only clear noise and keeps uncertain 
     lab: candidate("lab", "Castle Biosciences opens laboratory"),
     dating: candidate("dating", "Match Group relaunches dating site"),
     ai: candidate("ai", "DeepSeek and Anthropic dispute user-data routing"),
-    uncertain: candidate("uncertain", "China considers strategic technology export controls after diplomatic escalation")
+    breach: candidate("breach", "China probes DeepSeek Moonshot over data breaches"),
+    uncertain: candidate("uncertain", "China considers strategic technology export controls after diplomatic escalation"),
+    systemic: candidate("systemic", "Major bank liquidity stress spreads through credit markets")
   };
   writeFileSync(path, JSON.stringify(data));
   const store = new IntelligenceStore(path);
-  assert.equal(store.quarantineIrrelevantCandidateMemory(), 4);
+  assert.equal(store.quarantineIrrelevantCandidateMemory(), 5);
   const result = JSON.parse(readFileSync(path, "utf8"));
-  assert.deepEqual(Object.keys(result.memoryEvents), ["uncertain"]);
-  assert.equal(Object.keys(result.candidateMemoryQuarantine).length, 4);
+  assert.deepEqual(Object.keys(result.memoryEvents), ["uncertain", "systemic"]);
+  assert.equal(Object.keys(result.candidateMemoryQuarantine).length, 5);
   assert.equal(result.candidateMemoryQuarantine.ai.reason, "NO_PLAUSIBLE_MARKET_TRANSMISSION");
+  assert.equal(result.candidateMemoryQuarantine.breach.reason, "NO_PLAUSIBLE_MARKET_TRANSMISSION");
   assert.ok(readdirSync(dir).some((name) => name.includes("backup-pre-candidate-memory-cleanup-")));
 });

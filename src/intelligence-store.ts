@@ -142,18 +142,34 @@ export class IntelligenceStore {
   }
   /** Candidate memory additionally retains explicit cross-asset state observations without widening active evidence. */
   private candidateMemoryRelevant(event: EventAssessment): boolean {
+    if (this.genericCorporateWithoutTransmission(event.fact)) return false;
     return this.memoryRelevant(event) || this.candidateMemoryRelevantText(event.storyKey, event.fact);
   }
   private candidateMemoryRelevantText(storyKey: string, fact: string): boolean {
-    return this.memoryRelevantText(storyKey, fact) || /\b(treasury|yield|yields|bond|auction|real yield|dxy|dollar|fx|eurusd|gbpjpy)\b/i.test(fact);
+    return this.memoryRelevantText(storyKey, fact) || this.hasCandidateMarketTransmission(fact);
+  }
+  /**
+   * Candidate memory is broader than canonical evidence, but only where the text
+   * itself identifies a macro transmission. This deliberately does not use a
+   * company-name list: an AI/privacy dispute and an export-control action can
+   * involve the same company but belong to different market regimes.
+   */
+  private hasCandidateMarketTransmission(fact: string): boolean {
+    return /\b(treasury|yield|yields|bond|auction|real yield|dxy|dollar|fx|eurusd|gbpjpy|fed|fomc|interest rate|inflation|cpi|pce|nfp|payroll|gdp|ism|retail sales|jobless claims|oil|crude|brent|wti|opec|energy supply|refinery|commodity|hormuz|tanker|shipping disruption|tariff|sanction|export control|trade restriction|semiconductor restriction|financial stability|systemic financial|bank run|liquidity stress|credit market|capital market|fiscal policy|treasury supply|central bank gold|gold reserve|gold etf)\b/i.test(fact);
+  }
+  private genericCorporateWithoutTransmission(fact: string): boolean {
+    const corporateMatter = /\b(earnings|quarterly results|acquisition|takeover|laboratory|dating|real estate|privacy|data breach|data breaches|data leak|security incident|cyber incident|user[- ]data|routing|product dispute|antitrust lawsuit|corporate litigation|investigation|probes?|lawsuit|litigation)\b/i.test(fact);
+    return corporateMatter && !this.hasCandidateMarketTransmission(fact);
   }
   /** Legacy candidate cleanup is deliberately narrow: uncertain non-market records stay auditable. */
   private clearlyIrrelevantCandidate(record: MemoryEvent): boolean {
-    if (this.candidateMemoryRelevantText(record.storyKey, record.fact)) return false;
     if (!record.storyKey.startsWith("other-")) return false;
     const text = `${record.fact} ${record.action}`.toLowerCase();
-    return /\b(earnings|quarterly results|laboratory|dating site|dating app|marriage-focused|real estate acquisition|ai shopping agent)\b/.test(text) ||
-      /\b(deepseek|anthropic)\b.*\b(data leak|data leaks|user data|user-data|routing)\b/.test(text);
+    if (this.genericCorporateWithoutTransmission(text)) return true;
+    if (this.candidateMemoryRelevantText(record.storyKey, record.fact)) return false;
+    // Clear corporate/product matters lack a market channel unless the prior gate
+    // found an explicit macro, trade, energy, or systemic-finance context.
+    return /\b(earnings|quarterly results|acquisition|takeover|laboratory|dating|real estate|privacy|data breach|data breaches|data leak|security incident|cyber incident|user[- ]data|routing|product dispute|antitrust lawsuit|corporate litigation|investigation|probes?|lawsuit|litigation)\b/.test(text);
   }
   /** Move only clear legacy candidate noise to an auditable quarantine; never delete it. */
   quarantineIrrelevantCandidateMemory(): number {
