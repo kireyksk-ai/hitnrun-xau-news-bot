@@ -38,6 +38,11 @@ export async function observeMarket(store: IntelligenceStore): Promise<{ point: 
     candles: xauCandle ? { "5m": anatomy(xauCandle) } : undefined,
     coverage: { available: completed.length, requested: universe.length, quality } };
   store.recordMarketSnapshot(point);
+  // The same point-in-time market tape is the only source for quantitative rows;
+  // it is retained with provenance rather than reconstructed later.
+  for (const [instrument, value] of Object.entries(values)) store.recordQuantObservation({ instrument, value: value.price,
+    observedAt: value.observedAt ?? point.capturedAt, availableAt: point.capturedAt, source: value.source ?? "Yahoo Finance chart API",
+    freshness: value.quality ?? "DATA_UNAVAILABLE", quality: value.quality ?? "DATA_UNAVAILABLE", revision: "ORIGINAL" });
   const xau = values.XAUUSD, dxy = values.DXY, y10 = values.US10Y, wti = values.WTI;
   const previous = store.marketBrain().snapshots.at(-2);
   let kind: ShadowDecision["kind"] = "CONSISTENT";

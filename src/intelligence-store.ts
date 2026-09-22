@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { NewsArticle } from "./types.js";
 import type { ChangeType, EventAssessment, StoryState } from "./event-intelligence.js";
 import { MARKET_BRAIN_SCHEMA_VERSION, classifyEvidence, emptyBrain, type MarketExperience, type MarketPoint, type PersistentMarketBrain, type ShadowDecision } from "./persistent-market-brain.js";
+import type { DriftRecord, PositioningState, QuantModel, QuantObservation, QuantitativeState, Relationship, Scorecard, SourceEvidence } from "./quantitative.js";
 
 export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
 export type ReviewRecord = {
@@ -69,6 +70,7 @@ export class IntelligenceStore {
       this.data.brain = this.data.brain ?? emptyBrain();
       this.save();
     } else this.data.brain ??= emptyBrain();
+    this.data.brain.quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] };
   }
   private save(): void { writeFileSync(this.path, JSON.stringify(this.data), "utf8"); }
   private day(): string { return new Date().toISOString().slice(0, 10); }
@@ -216,6 +218,15 @@ export class IntelligenceStore {
     const brain = this.data.brain ??= emptyBrain(); brain.experiences.push(experience);
     brain.experiences.splice(0, Math.max(0, brain.experiences.length - 500)); this.save();
   }
+  /** Versioned shadow evidence only; no method here participates in NEWS routing. */
+  quantitative(): QuantitativeState { return (this.data.brain ??= emptyBrain()).quantitative ??= { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] }; }
+  recordQuantObservation(observation: QuantObservation): void { const q=this.quantitative(); q.observations[`${observation.instrument}|${observation.observedAt}`]=observation; this.save(); }
+  recordQuantModel(model: QuantModel): void { const q=this.quantitative(); if(q.models.some(item=>item.id===model.id&&item.version===model.version)) throw new Error("Quantitative model versions are immutable"); q.models.push(model); this.save(); }
+  recordRelationship(item: Relationship): void { this.quantitative().relationships.push(item); this.save(); }
+  recordPositioning(item: PositioningState): void { this.quantitative().positioning.push(item); this.quantitative().positioning.splice(0, Math.max(0,this.quantitative().positioning.length-520)); this.save(); }
+  recordScorecard(item: Scorecard): void { const q=this.quantitative(); const i=q.scorecards.findIndex(x=>x.id===item.id); if(i<0) q.scorecards.push(item); else q.scorecards[i]=item; this.save(); }
+  recordSourceEvidence(item: SourceEvidence): void { this.quantitative().sourceEvidence[item.source]=item; this.save(); }
+  recordQuantDrift(item: DriftRecord): void { this.quantitative().drift.push(item); this.quantitative().drift.splice(0, Math.max(0,this.quantitative().drift.length-500)); this.save(); }
   similarExperiences(regime: string, trigger: string): MarketExperience[] {
     return (this.data.brain?.experiences ?? []).filter((item) => item.regime === regime || item.trigger === trigger).slice(-5);
   }

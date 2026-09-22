@@ -2,7 +2,7 @@
  * Phase 1-4 state only.  Nothing in this module can change NEWS routing.
  * Records contain evidence and conclusions, never model reasoning traces.
  */
-export const MARKET_BRAIN_SCHEMA_VERSION = 3;
+export const MARKET_BRAIN_SCHEMA_VERSION = 4;
 
 export type EvidenceRecord = {
   id: string; timestamp: string; topic: string; subtopic: string; facts: string;
@@ -32,7 +32,7 @@ export type ShadowDecision = {
   attribution: "CONFIRMED_DRIVER" | "LIKELY_DRIVER" | "POSSIBLE_DRIVER" | "MULTIPLE_COMPETING_DRIVERS" | "INSUFFICIENT_EVIDENCE" | "DRIVER_UNKNOWN";
   facts: string[]; channels: string[]; confidence: number; productionDecision?: string;
 };
-export type MarketExperience = { id: string; createdAt: string; regime: string; trigger: string; marketSnapshotId?: string; attribution: ShadowDecision["attribution"]; confidence: number; outcome?: string };
+export type MarketExperience = { id: string; createdAt: string; regime: string; trigger: string; marketSnapshotId?: string; attribution: ShadowDecision["attribution"]; confidence: number; outcome?: string; quantitative?: { modelId?:string; modelVersion?:number; residual?:number; relationshipState?:string; positioningState?:string; sampleSize?:number; stability?:string; sourceReputationState?:string; scorecardId?:string } };
 export type PersistentMarketBrain = {
   schemaVersion: number;
   migratedAt: string;
@@ -44,10 +44,11 @@ export type PersistentMarketBrain = {
   providerHealth: Record<string, { configured: boolean; lastFetchedAt?: string; lastLiveDataAt?: string; lastError?: string }>;
   quarantine?: Record<string, { quarantinedAt: string; reason: string; original: EvidenceRecord }>;
   lastObserverAt?: string;
+  quantitative?: import("./quantitative.js").QuantitativeState;
 };
 
 export function emptyBrain(now = new Date().toISOString()): PersistentMarketBrain {
-  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {} };
+  return { schemaVersion: MARKET_BRAIN_SCHEMA_VERSION, migratedAt: now, evidence: {}, states: {}, snapshots: [], shadow: [], experiences: [], providerHealth: {}, quarantine: {}, quantitative: { observations:{}, models:[], relationships:[], positioning:[], scorecards:[], sourceEvidence:{}, drift:[] } };
 }
 
 export function sessionAt(date: Date): "ASIA" | "LONDON" | "NEW_YORK" | "LONDON_NEW_YORK_OVERLAP" | "ROLLOVER_TRANSITION" {

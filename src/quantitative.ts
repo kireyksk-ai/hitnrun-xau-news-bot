@@ -1,0 +1,57 @@
+/** Local, deterministic quantitative evidence.  It never creates a trade or NEWS decision. */
+import type { Horizon } from "./shadow-learning.js";
+
+export type QuantQuality = "FRESH" | "STALE" | "DATA_UNAVAILABLE" | "INSUFFICIENT_SAMPLE" | "MODEL_UNSTABLE";
+export type RevisionState = "ORIGINAL" | "REVISED" | "CORRECTED" | "BACKFILLED" | "RECONSTRUCTED";
+export type EvidenceState = "VALIDATED" | "INSUFFICIENT_SAMPLE" | "MODEL_UNSTABLE" | "DATA_UNAVAILABLE" | "NO_EDGE_FOUND" | "EXPLORATORY_ONLY";
+export type HypothesisClass = "PRE_SPECIFIED_HYPOTHESIS" | "EXPLORATORY";
+export type QuantObservation = { instrument:string; value:number; observedAt:string; availableAt?:string; source:string; freshness:QuantQuality; quality:QuantQuality; revision:RevisionState };
+export type FitRow = { timestamp:string; target:number; features:Record<string, number>; availableAt?:string; revision?:RevisionState };
+export type QuantModel = { id:string; version:number; fitAt:string; trainingWindow:{start:string;end:string}; evaluationWindow?:{start:string;end:string}; features:string[]; transforms:string[]; regime?:string; horizon:Horizon; sampleSize:number; inSample:{rSquared:number; mae:number}; outOfSample?:{mae:number; baselineMae:number; improvement:number}; state:EvidenceState; purge:number; embargo:number; hypothesis:HypothesisClass; pointInTimeIntegrity:"VERIFIED"|"LIMITED"; limitations:string[] };
+export type FairValue = { state:EvidenceState; modelId?:string; modelVersion?:number; implied?:number; actual?:number; residual?:number; zScore?:number; sampleSize:number; note:string };
+export type Relationship = { id:string; feature:string; target:string; horizon:Horizon; regime?:string; window:{start:string;end:string}; sampleSize:number; correlation?:number; sign?:"POSITIVE"|"NEGATIVE"|"FLAT"; magnitude?:number; state:EvidenceState; hypothesis:HypothesisClass; tests:number; correction:"BONFERRONI"; adjustedPValue?:number; inSample?:number; outOfSample?:number; purge:number; embargo:number; pointInTimeIntegrity:"VERIFIED"|"LIMITED" };
+export type DriftRecord = { relationshipId:string; previous:EvidenceState; current:EvidenceState; performanceChange:number; sampleSize:number; evaluatedAt:string };
+export type PositioningState = { category:"GOLD_POSITIONING"; observedAt:string; source?:string; state:EvidenceState; quality:QuantQuality; note:string; netLong?:number; weeklyChange?:number; percentile?:number; zScore?:number; sampleSize:number };
+export type Scorecard = { id:string; hypothesisId:string; createdAt:string; horizon:Horizon; causalChannel:string; regime:string; direction?:"UP"|"DOWN"; confidence?:number; marketState:string; dueAt:string; evaluatedAt?:string; xauReturn?:number; crossAssetResponse?:string; finalAttribution?:string; state:"PENDING"|"EVALUATED"|"INSUFFICIENT_SAMPLE"; metrics?:{sampleSize:number; hitRate?:number; precision?:number; recall?:number; brier?:number; calibrationError?:number; falseAttributionRate?:number} };
+export type SourceEvidence = { source:string; observations:number; confirmed:number; corrections:number; duplicates:number; noise:number; materialDiscoveries:number; confirmationLatencyMs?:number; sampleSize:number; factualReliability:number; marketUsefulness:number; state:EvidenceState; evaluatedAt:string };
+export type QuantitativeState = { observations:Record<string,QuantObservation>; models:QuantModel[]; relationships:Relationship[]; positioning:PositioningState[]; scorecards:Scorecard[]; sourceEvidence:Record<string,SourceEvidence>; drift:DriftRecord[] };
+
+const minimum = (h:Horizon) => h === "INTRADAY" ? 40 : h === "TACTICAL" ? 30 : 20;
+const mean = (xs:number[]) => xs.reduce((a,b)=>a+b,0)/xs.length;
+const std = (xs:number[]) => { if(xs.length<2)return 0; const m=mean(xs); return Math.sqrt(xs.reduce((s,x)=>s+(x-m)**2,0)/(xs.length-1)); };
+const corr = (x:number[], y:number[]) => { const mx=mean(x), my=mean(y), sx=Math.sqrt(x.reduce((s,v)=>s+(v-mx)**2,0)), sy=Math.sqrt(y.reduce((s,v)=>s+(v-my)**2,0)); return sx&&sy?x.reduce((s,v,i)=>s+(v-mx)*(y[i]-my),0)/(sx*sy):0; };
+const pApprox = (r:number,n:number) => n < 4 ? 1 : Math.min(1, Math.exp(-Math.abs(r)*Math.sqrt(n-2)));
+
+export function validateObservation(o: QuantObservation): QuantQuality { return Number.isFinite(o.value) && o.observedAt && o.source && o.quality !== "DATA_UNAVAILABLE" ? o.quality : "DATA_UNAVAILABLE"; }
+export function relationship(id:string, feature:string, target:string, rows:FitRow[], horizon:Horizon, hypothesis:HypothesisClass, tests=1, regime?:string, purge=0, embargo=0): Relationship {
+  const valid=rows.filter(r=>Number.isFinite(r.target)&&Number.isFinite(r.features[feature])); const sampleSize=valid.length;
+  const base={id,feature,target,horizon,regime,window:{start:valid[0]?.timestamp??"",end:valid.at(-1)?.timestamp??""},sampleSize,hypothesis,tests,correction:"BONFERRONI" as const,purge,embargo,pointInTimeIntegrity:valid.every(r=>!r.availableAt||r.availableAt<=r.timestamp)&&valid.every(r=>r.revision!="RECONSTRUCTED")?"VERIFIED" as const:"LIMITED" as const};
+  if(sampleSize<minimum(horizon)) return {...base,state:"INSUFFICIENT_SAMPLE"};
+  const r=corr(valid.map(x=>x.features[feature]),valid.map(x=>x.target)), adjustedPValue=Math.min(1,pApprox(r,sampleSize)*Math.max(1,tests));
+  const state:EvidenceState=hypothesis==="EXPLORATORY"?"EXPLORATORY_ONLY":adjustedPValue>.05?"NO_EDGE_FOUND":"VALIDATED";
+  return {...base,correlation:r,sign:Math.abs(r)<.02?"FLAT":r>0?"POSITIVE":"NEGATIVE",magnitude:Math.abs(r),adjustedPValue,state};
+}
+export function walkForward(rows:FitRow[], feature:string, horizon:Horizon, purge=0, embargo=0): {state:EvidenceState; train:number; test:number; chronology:boolean; purge:number; embargo:number; mae?:number; baselineMae?:number} {
+  const ordered=[...rows].sort((a,b)=>a.timestamp.localeCompare(b.timestamp)); const split=Math.floor(ordered.length*.7), testStart=split+purge+embargo, train=ordered.slice(0,split), test=ordered.slice(testStart);
+  if(train.length<minimum(horizon)||test.length<Math.max(10,minimum(horizon)/2)) return {state:"INSUFFICIENT_SAMPLE",train:train.length,test:test.length,chronology:true,purge,embargo};
+  if(!ordered.every((r,i)=>i===0||r.timestamp>=ordered[i-1].timestamp)||!test.every(r=>!r.availableAt||r.availableAt<=r.timestamp)) return {state:"MODEL_UNSTABLE",train:train.length,test:test.length,chronology:false,purge,embargo};
+  const x=train.map(r=>r.features[feature]), y=train.map(r=>r.target), beta=corr(x,y)*(std(y)/(std(x)||1)), intercept=mean(y)-beta*mean(x);
+  const mae=mean(test.map(r=>Math.abs(r.target-(intercept+beta*r.features[feature])))), baselineMae=mean(test.map(r=>Math.abs(r.target-mean(y))));
+  return {state:mae<baselineMae?"VALIDATED":"NO_EDGE_FOUND",train:train.length,test:test.length,chronology:true,purge,embargo,mae,baselineMae};
+}
+export function fairValue(model:QuantModel, actual:number, featureValues:Record<string,number>, coefficients:Record<string,number>, intercept=0, residualHistory:number[]=[]): FairValue {
+  if(model.state!=="VALIDATED") return {state:model.state,modelId:model.id,modelVersion:model.version,sampleSize:model.sampleSize,note:"Model is not validated; no reference value is surfaced."};
+  if(model.features.some(f=>!Number.isFinite(featureValues[f])||!Number.isFinite(coefficients[f]))) return {state:"DATA_UNAVAILABLE",modelId:model.id,modelVersion:model.version,sampleSize:model.sampleSize,note:"Required fair-value input is unavailable."};
+  const implied=intercept+model.features.reduce((s,f)=>s+featureValues[f]*coefficients[f],0), residual=actual-implied, sigma=std(residualHistory);
+  return {state:"VALIDATED",modelId:model.id,modelVersion:model.version,implied,actual,residual,zScore:residualHistory.length>=20&&sigma?residual/sigma:undefined,sampleSize:model.sampleSize,note:"Residual describes unexplained price, not a mean-reversion or trade signal."};
+}
+/** Construct a versioned, single-factor baseline candidate from point-in-time rows. */
+export function fitFairValueBaseline(id:string, version:number, rows:FitRow[], feature:string, horizon:Horizon, fitAt:string, hypothesis:HypothesisClass="PRE_SPECIFIED_HYPOTHESIS", purge=0, embargo=0): QuantModel {
+  const evaluation=walkForward(rows,feature,horizon,purge,embargo), valid=rows.filter(r=>Number.isFinite(r.target)&&Number.isFinite(r.features[feature]));
+  const x=valid.map(r=>r.features[feature]), y=valid.map(r=>r.target), r=valid.length?corr(x,y):0;
+  const prediction=x.map(value=>mean(y)+r*(std(y)/(std(x)||1))*(value-mean(x))), mae=valid.length?mean(prediction.map((value,i)=>Math.abs(y[i]-value))):0;
+  return {id,version,fitAt,trainingWindow:{start:valid[0]?.timestamp??"",end:valid.at(-1)?.timestamp??""},evaluationWindow:valid.length?{start:valid[Math.floor(valid.length*.7)]?.timestamp??"",end:valid.at(-1)?.timestamp??""}:undefined,features:[feature],transforms:["level"],horizon,sampleSize:valid.length,inSample:{rSquared:r*r,mae},outOfSample:evaluation.mae===undefined?undefined:{mae:evaluation.mae,baselineMae:evaluation.baselineMae??0,improvement:(evaluation.baselineMae??0)-evaluation.mae},state:evaluation.state,purge,embargo,hypothesis,pointInTimeIntegrity:valid.every(row=>!row.availableAt||row.availableAt<=row.timestamp)&&valid.every(row=>row.revision!=="RECONSTRUCTED")?"VERIFIED":"LIMITED",limitations:evaluation.state==="INSUFFICIENT_SAMPLE"?["Minimum sample requirement not met."]:evaluation.state==="NO_EDGE_FOUND"?["Did not beat the simple persistence baseline out of sample."]:[]};
+}
+export function sourceEvidence(source:string, observations:number, confirmed:number, corrections:number, duplicates:number, noise:number, materialDiscoveries:number, evaluatedAt:string): SourceEvidence { const prior=0.5, factual=(prior*10+(confirmed/(Math.max(1,observations)))*observations)/(10+observations), useful=(prior*10+(materialDiscoveries/Math.max(1,observations))*observations)/(10+observations), state=observations<20?"INSUFFICIENT_SAMPLE":"VALIDATED"; return {source,observations,confirmed,corrections,duplicates,noise,materialDiscoveries,sampleSize:observations,factualReliability:factual,marketUsefulness:useful,state,evaluatedAt}; }
+export function evaluateScorecard(card:Scorecard, now:string, xauReturn:number, crossAssetResponse:string, attribution:string): Scorecard { if(Date.parse(now)<Date.parse(card.dueAt)) return card; return {...card,evaluatedAt:now,xauReturn,crossAssetResponse,finalAttribution:attribution,state:"EVALUATED",metrics:{sampleSize:1,hitRate:card.direction?(Math.sign(xauReturn)===(card.direction==="UP"?1:-1)?1:0):undefined}}; }
+export function drift(previous:Relationship,current:Relationship,evaluatedAt:string): DriftRecord { const performanceChange=(current.outOfSample??current.correlation??0)-(previous.outOfSample??previous.correlation??0); return {relationshipId:current.id,previous:previous.state,current:Math.sign(previous.correlation??0)!==Math.sign(current.correlation??0)||Math.abs(performanceChange)>.25?"MODEL_UNSTABLE":current.state,performanceChange,sampleSize:current.sampleSize,evaluatedAt}; }
