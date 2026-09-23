@@ -44,6 +44,12 @@ Adapter Truth Social `@realDonaldTrump` tersedia dan dapat diperiksa setiap 15 d
 
 ## Catatan operasional
 
+### Kalender ekonomi high-impact
+
+Jalur kalender memakai [Finance Calendar API](https://www.financecalendar.com/api/) tanpa key tambahan. Hanya event `impact=high` dengan jam rilis pasti yang diproses. Bot mengirim peringatan sekitar 10 menit sebelum rilis dalam WIB, lalu hasil aktual setelah nilainya tersedia dan sekurangnya satu menit setelah jadwal rilis. Konsensus dan angka sebelumnya disimpan sebelum rilis agar pembandingan tidak menggunakan perubahan retrospektif. Pesan menyertakan atribusi Finance Calendar sesuai syarat penggunaan datanya. Penyedia menyatakan actual diperbarui dalam satu jam, jadi pengiriman 1–2 menit **tidak dijamin**. Bila actual kosong, bot tidak mengarang hasil dan tidak mengirim pesan hasil.
+
+Status pengiriman per event disimpan di `${SQLITE_PATH}.calendar.json`; gunakan disk persisten bersama state bot. Set `ECONOMIC_CALENDAR_ENABLED=false` untuk mematikan jalur ini tanpa mengubah berita reguler. Narasi kalender menggunakan perbandingan faktual dan pembacaan lintas aset yang tersedia; tidak mengubah prompt berita Sol atau mengaktifkan Phase 5/trading.
+
 - Pastikan paket NewsAPI yang dipilih mengizinkan penggunaan produksi dan sumber yang Anda butuhkan.
 - Mulai dengan `OPENAI_MODEL=gpt-5-mini`, lalu sesuaikan ke model yang tersedia di akun Anda bila perlu.
 - Periksa log pada minggu pertama dan kalibrasikan prompt editorial bila terlalu ketat/longgar.

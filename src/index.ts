@@ -21,6 +21,7 @@ import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
 import { formatDailyLearningReview } from "./daily-learning-review.js";
+import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
@@ -53,6 +54,8 @@ const pausedUntil = new Map<string, number>();
 let aiDay = "", aiCount = 0, ticking = false, adminPolling = false;
 let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
+const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
+let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 
 function aiAllowed(): boolean {
   const day = new Date().toISOString().slice(0, 10);
@@ -89,6 +92,38 @@ async function replayQueued(): Promise<number> {
     store.rememberStory(record.event, true); store.increment("alertsSent"); count++;
   }
   return count;
+}
+async function calendarTick(): Promise<void> {
+  if (!calendarLedger || calendarTicking) return;
+  calendarTicking = true;
+  try {
+    const now = Date.now();
+    if (now - lastCalendarFetchAt >= 300000) {
+      lastCalendarFetchAt = now;
+      try {
+        calendarEvents = await fetchCalendarEvents();
+        for (const event of calendarEvents) calendarLedger.observe(event, Date.now());
+        calendarLedger.prune(Date.now());
+        log.info({ events: calendarEvents.length }, "Economic calendar refreshed");
+      } catch (error) { log.warn({ err: error }, "Economic calendar refresh failed; keeping prior schedule"); }
+    }
+    for (const event of calendarEvents) {
+      const existing = calendarLedger.get(event.id);
+      const stage = dueStage(event, Date.now(), existing, destinations.map((item) => item.chatId));
+      if (!stage || store.safeMode) continue;
+      const withinHour = recentSendTimes.filter((time) => Date.now() - time < 3600000);
+      recentSendTimes.length = 0; recentSendTimes.push(...withinHour);
+      if (recentSendTimes.length >= 30) { store.setSafeMode(true); log.error("Safe mode enabled after abnormal combined news/calendar alert volume"); break; }
+      const pending = destinations.filter((destination) => !existing[stage === "WARNING" ? "warnedTo" : "actualTo"]?.[destination.chatId]);
+      if (!pending.length) continue;
+      const snapshot = await marketSnapshot().catch(() => "");
+      const message = formatCalendarMessage(event, stage, calendarNarrative(event, stage, snapshot, existing), existing);
+      const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, pending, message, store);
+      for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
+      if (Object.keys(accepted).length) { calendarLedger.mark(event.id, stage, accepted); recentSendTimes.push(Date.now()); }
+      log.info({ event: event.name, stage, accepted: Object.keys(accepted).length }, "Calendar alert processed");
+    }
+  } finally { calendarTicking = false; }
 }
 function jakartaDayAndHour(date = new Date()): { day: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta",
@@ -188,4 +223,8 @@ async function tick(): Promise<void> {
 }
 await tick();
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
+if (config.ECONOMIC_CALENDAR_ENABLED) {
+  await calendarTick();
+  setInterval(() => void calendarTick().catch((error) => log.error({ err: error }, "Calendar tick failed")), 5000);
+}
 log.info({ providers: providers.map((p) => p.name), adminEnabled: Boolean(config.TELEGRAM_ADMIN_CHAT_ID) }, "Market intelligence worker started");
