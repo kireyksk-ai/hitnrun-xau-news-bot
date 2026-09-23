@@ -73,3 +73,10 @@ test("a sent alert with a call reaches the ledger hook exactly once", async () =
   assert.equal(result.stage, "SENT");
   assert.deepEqual(calls, [["SENT", call]]);
 });
+
+test("the Telegram NEWS text carries no potential-direction footer", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/editor.ts", import.meta.url), "utf8");
+  const build = source.slice(source.indexOf("function buildTelegramMessage"), source.indexOf("export class Editor"));
+  assert.doesNotMatch(build, /goldCallLine/);
+});
