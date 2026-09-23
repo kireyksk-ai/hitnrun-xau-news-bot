@@ -29,6 +29,12 @@ const plausible = [
   "CME raises COMEX gold futures margin after delivery stress."
 ];
 
+test("unchanged Fed decision with new rate guidance is judged by Sol, not a noise keyword", () => {
+  const event = assessEvent(article("Fed holds rates unchanged, but its statement signals a higher rate path next year."));
+  assert.notEqual(event.candidateRoute, "OBVIOUS_NOISE");
+  assert.equal(shouldReview(event), true);
+});
+
 test("verified X fast wires retain trusted-source routing, unknown accounts do not", async () => {
   const wire = { ...article("@FirstSquawk: FED'S COLLINS: RESTRICTIVE RATE WILL HELP RETURN INFLATION TO TARGET"),
     provider: "twitter-wire", providerId: "123", sourceName: "X / Twitter Wire",
