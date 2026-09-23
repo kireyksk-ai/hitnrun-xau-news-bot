@@ -105,7 +105,9 @@ function buildTelegramMessage(f: FormattableFields, call?: GoldCall): string {
   return [
     `<b>⚠️ ${escapeHtml(f.judul)}</b>`,
     escapeHtml(f.ringkasan),
-    escapeHtml(f.dampakEmas) + (call ? `\n${goldCallLine(call)}` : "")
+    // The potential direction is recorded silently for the accuracy ledger only;
+    // the owner wants the NEWS text to keep its cross-market weighing format.
+    escapeHtml(f.dampakEmas)
   ].join("\n\n");
 }
 
