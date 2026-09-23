@@ -44,9 +44,9 @@ Adapter Truth Social `@realDonaldTrump` tersedia dan dapat diperiksa setiap 15 d
 
 ## Catatan operasional
 
-### Kalender ekonomi high-impact
+### Kalender ekonomi dan hasil rilis
 
-Jalur kalender memakai [Finance Calendar API](https://www.financecalendar.com/api/) tanpa key tambahan. Hanya event `impact=high` dengan jam rilis pasti yang diproses. Bot mengirim peringatan sekitar 10 menit sebelum rilis dalam WIB, lalu hasil aktual setelah nilainya tersedia dan sekurangnya satu menit setelah jadwal rilis. Konsensus dan angka sebelumnya disimpan sebelum rilis agar pembandingan tidak menggunakan perubahan retrospektif. Pesan menyertakan atribusi Finance Calendar sesuai syarat penggunaan datanya. Penyedia menyatakan actual diperbarui dalam satu jam, jadi pengiriman 1–2 menit **tidak dijamin**. Bila actual kosong, bot tidak mengarang hasil dan tidak mengirim pesan hasil.
+Jalur kalender memakai [Finance Calendar API](https://www.financecalendar.com/api/) tanpa key tambahan. Peringatan pra-rilis hanya untuk event `impact=high` dengan jam rilis pasti. Hasil aktual untuk semua tingkat dampak (`high`, `medium`, `low`) yang tercantum di feed dikirim sebagai berita kalender ke tujuan Telegram yang sudah ada, setelah nilainya tersedia dan sekurangnya satu menit setelah jadwal rilis. Konsensus dan angka sebelumnya disimpan sebelum rilis agar pembandingan tidak menggunakan perubahan retrospektif. Pesan menyertakan atribusi Finance Calendar sesuai syarat penggunaan datanya. Penyedia menyatakan actual diperbarui dalam satu jam, jadi pengiriman 1–2 menit **tidak dijamin**. Bila actual kosong, bot tidak mengarang hasil dan tidak mengirim pesan hasil. Feed ini tidak mencakup setiap rilis ekonomi (contohnya PMI AS 23 September 2026), sehingga penemuan artikel berita tetap dijalankan terpisah dan kini memasukkan istilah PMI.
 
 Status pengiriman per event disimpan di `${SQLITE_PATH}.calendar.json`; gunakan disk persisten bersama state bot. Set `ECONOMIC_CALENDAR_ENABLED=false` untuk mematikan jalur ini tanpa mengubah berita reguler. Narasi kalender menggunakan perbandingan faktual dan pembacaan lintas aset yang tersedia; tidak mengubah prompt berita Sol atau mengaktifkan Phase 5/trading.
 

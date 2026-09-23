@@ -104,7 +104,12 @@ async function calendarTick(): Promise<void> {
         calendarEvents = await fetchCalendarEvents();
         for (const event of calendarEvents) calendarLedger.observe(event, Date.now());
         calendarLedger.prune(Date.now());
-        log.info({ events: calendarEvents.length }, "Economic calendar refreshed");
+        const missingActual = calendarEvents.filter((event) => {
+          const age = Date.now() - Date.parse(event.releaseAt);
+          return age >= 90 * 60000 && age <= 72 * 3600000 && !event.actual;
+        });
+        log.info({ events: calendarEvents.length, missingActual: missingActual.length }, "Economic calendar refreshed");
+        if (missingActual.length) log.warn({ events: missingActual.map((event) => event.name) }, "Calendar release still has no actual; no result will be invented");
       } catch (error) { log.warn({ err: error }, "Economic calendar refresh failed; keeping prior schedule"); }
     }
     for (const event of calendarEvents) {

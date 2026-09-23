@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 export type CalendarEvent = {
   id: string; name: string; country: string; releaseAt: string;
   consensus: string | null; prior: string | null; actual: string | null;
-  impact: "high"; url: string;
+  impact: "high" | "medium" | "low"; url: string;
 };
 type RawEvent = Record<string, unknown>;
 export type Delivery = { warnedTo?: Record<string, number>; actualTo?: Record<string, number>; firstSeenForecast?: string | null; firstSeenPrior?: string | null; releaseAt?: string };
@@ -17,22 +17,22 @@ export function parseCalendarEvents(raw: unknown): CalendarEvent[] {
   if (!raw || typeof raw !== "object" || !Array.isArray((raw as { events?: unknown }).events)) throw new Error("Invalid economic calendar response");
   const events = (raw as { events: RawEvent[] }).events;
   return events.flatMap((item) => {
-    if (!item || item.impact !== "high" || item.all_day !== false) return [];
+    if (!item || !["high", "medium", "low"].includes(String(item.impact)) || item.all_day !== false) return [];
     const name = text(item.name), releaseAt = text(item.time_utc), url = text(item.url);
     if (!name || !releaseAt || !url || !/^https:\/\/www\.financecalendar\.com\/event\//.test(url)) return [];
     const date = new Date(releaseAt);
     if (Number.isNaN(date.getTime()) || !/(Z|[+-]\d\d:\d\d)$/.test(releaseAt)) return [];
     return [{ id: url, name, country: text(item.country) ?? "", releaseAt: date.toISOString(),
-      consensus: text(item.consensus), prior: text(item.prior), actual: text(item.actual), impact: "high" as const, url }];
+      consensus: text(item.consensus), prior: text(item.prior), actual: text(item.actual), impact: item.impact as CalendarEvent["impact"], url }];
   });
 }
 
 export async function fetchCalendarEvents(fetcher: typeof fetch = fetch, now = new Date()): Promise<CalendarEvent[]> {
-  const from = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const from = new Date(now.getTime() - 3 * 86400000).toISOString().slice(0, 10);
   const to = new Date(now.getTime() + 14 * 86400000).toISOString().slice(0, 10);
   const url = new URL("https://www.financecalendar.com/wp-json/fc/v1/calendar");
   url.searchParams.set("from", from); url.searchParams.set("to", to);
-  url.searchParams.set("impact", "high"); url.searchParams.set("limit", "500");
+  url.searchParams.set("limit", "500");
   const response = await fetcher(url, { headers: { accept: "application/json", "user-agent": "HitnRun-XAU-Calendar/1.0" }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Economic calendar HTTP ${response.status}`);
   return parseCalendarEvents(await response.json());
@@ -45,8 +45,9 @@ export function formatWib(releaseAt: string): string {
 export function dueStage(event: CalendarEvent, nowMs: number, delivery: Delivery, destinations: string[] = []): "WARNING" | "ACTUAL" | null {
   const offset = nowMs - Date.parse(event.releaseAt);
   const pending = (sent: Record<string, number> | undefined) => destinations.length ? destinations.some((id) => !sent?.[id]) : !sent || !Object.keys(sent).length;
-  if (offset >= 60000 && offset <= 6 * 3600000 && event.actual && pending(delivery.actualTo)) return "ACTUAL";
-  if (offset >= -600000 && offset < -480000 && pending(delivery.warnedTo)) return "WARNING";
+  // Never flood Telegram with historical results discovered only after deployment.
+  if (delivery.releaseAt && offset >= 60000 && offset <= 72 * 3600000 && event.actual && pending(delivery.actualTo)) return "ACTUAL";
+  if (event.impact === "high" && offset >= -600000 && offset < 0 && pending(delivery.warnedTo)) return "WARNING";
   return null;
 }
 
@@ -97,7 +98,7 @@ export function formatCalendarMessage(event: CalendarEvent, stage: "WARNING" | "
   const stats = stage === "WARNING"
     ? `Forecast: ${escapeHtml(event.consensus ?? "belum tersedia")} | Sebelumnya: ${escapeHtml(event.prior ?? "belum tersedia")}`
     : `Actual: ${escapeHtml(event.actual ?? "belum tersedia")} | Forecast: ${escapeHtml((saved.firstSeenForecast !== undefined ? saved.firstSeenForecast : event.consensus) ?? "belum tersedia")} | Sebelumnya: ${escapeHtml((saved.firstSeenPrior !== undefined ? saved.firstSeenPrior : event.prior) ?? "belum tersedia")}`;
-  const header = stage === "WARNING" ? "🚨 WARNING — U READY4 NEWSSSSS 🚨" : "🚨 HASIL NEWS 3 BINTANG 🚨";
+  const header = stage === "WARNING" ? "🚨 WARNING — U READY4 NEWSSSSS 🚨" : `📰 HASIL BERITA KALENDER${event.impact === "high" ? " ⭐⭐⭐" : ""}`;
   const caution = stage === "WARNING"
     ? "⚠️ PERSIAPAN: CLEAR POSISI UNTUK HINDARI RISIKO. Jangan judi menebak hasil rilis. Setelah angka keluar, lihat reaksi candle 15 menit pertama untuk mencari arah mata angin—gerakan pertama belum tentu arah yang bertahan."
     : "Reaksi awal pasar bisa berubah; arah emas belum terkonfirmasi hanya dari angka rilis.";

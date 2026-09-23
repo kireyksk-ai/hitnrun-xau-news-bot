@@ -19,8 +19,8 @@ export type EventAssessment = {
 };
 
 const entities = ["trump", "iran", "israel", "saudi", "hormuz", "houthi", "fed", "fomc", "treasury", "opec", "russia", "china"];
-const scheduled = /\b(cpi|pce|nfp|nonfarm payroll|gdp|ism|retail sales|jobless claims|fomc decision|treasury auction)\b/i;
-const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll|gdp|retail sales|fiscal|tax)\b/i;
+const scheduled = /\b(cpi|pce|nfp|nonfarm payroll|gdp|ism|pmi|retail sales|jobless claims|fomc decision|treasury auction)\b/i;
+const relevant = /\b(gold|xau|dxy|dollar|treasury|yield|inflation|oil|crude|brent|wti|tanker|shipping|fed|fomc|rate|war|iran|hormuz|sanction|tariff|cpi|pce|nfp|payroll|gdp|ism|pmi|retail sales|fiscal|tax)\b/i;
 const authority = /\b(trump|white house|president|fed|fomc|powell|goolsbee|waller|treasury|bessent|iran|israel|saudi|houthi|opec)\b/i;
 const materialAction = /\b(announces?|orders?|imposes?|approves?|rejects?|denies?|cancels?|withdraws?|rules out|agrees?|accepts?|offers?|open to meeting|attacks?|strikes?|launches?|threatens?|threat|blocks?|declares?|signals?|ceasefire|ultimatum|disrupts?|disrupted|shuts? down|reopens?|resumes?|hikes?|cuts?|raises?|releases?|vot(?:es|ed)|surges?|plunges?|revis(?:es|ed))\b/i;
 const minorOrCommentary = /\b(analyst opinion|market commentary|roundup|weekly outlook|could someday|routine maintenance|small local|minor disruption|reiterat(?:e|es|ed|ing)|repeat(?:s|ed|ing)?|no new details|without new policy|without a policy change|without announcing policy)\b/i;
@@ -78,7 +78,7 @@ function normalize(text: string): string { return text.toLowerCase().replace(/ht
 function storyKeyFor(text: string): string {
   const t = text.toLowerCase();
   if (/iran|hormuz|israel|saudi|houthi/.test(t)) return "iran-gulf-conflict";
-  const release = t.match(/\b(cpi|pce|nfp|payroll|gdp|ism|retail sales|jobless claims)\b/);
+  const release = t.match(/\b(cpi|pce|nfp|payroll|gdp|ism|pmi|retail sales|jobless claims)\b/);
   if (release) return `us-macro-${release[1].replaceAll(" ", "-")}`;
   if (/fed|fomc|powell|goolsbee|waller|warsh|rate/.test(t)) return "fed-policy";
   if (/oil|crude|brent|wti|opec|tanker/.test(t)) return "oil-supply";

@@ -1,7 +1,7 @@
 import type { NewsArticle, NewsProvider } from "../types.js";
 
 const query = [
-  'Federal Reserve OR Fed OR Powell OR CPI OR PCE OR NFP OR "Treasury yields" OR DXY OR dollar',
+  'Federal Reserve OR Fed OR Powell OR CPI OR PCE OR NFP OR PMI OR "business activity" OR "Treasury yields" OR DXY OR dollar',
   'gold OR XAUUSD OR oil OR Brent OR WTI OR Iran OR Israel OR Houthi OR Russia OR Ukraine OR China OR tariffs OR sanctions OR war'
 ].join(" OR ");
 
@@ -11,7 +11,7 @@ const fallbackFeeds = [
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml", source: "BBC World" }
 ];
 
-const relevantHeadline = /\b(gold|xau|dollar|dxy|fed|fomc|powell|inflation|cpi|pce|ppi|nfp|payroll|treasury|yield|oil|brent|wti|iran|israel|houthi|russia|ukraine|china|taiwan|sanction|tariff|war|missile|ceasefire)\b/i;
+const relevantHeadline = /\b(gold|xau|dollar|dxy|fed|fomc|powell|inflation|cpi|pce|ppi|nfp|payroll|pmi|business activity|treasury|yield|oil|brent|wti|iran|israel|houthi|russia|ukraine|china|taiwan|sanction|tariff|war|missile|ceasefire)\b/i;
 
 function text(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"));

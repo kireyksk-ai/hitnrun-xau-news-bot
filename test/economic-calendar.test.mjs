@@ -8,25 +8,30 @@ import { CalendarLedger, calendarNarrative, compareActual, dueStage, formatCalen
 const releaseAt = "2026-09-24T01:30:00.000Z";
 const event = { id: "https://www.financecalendar.com/event/australia-labour-force-september-2026/", name: "Australia Labour Force", country: "", releaseAt, consensus: "4.5%", prior: "4.4%", actual: null, impact: "high", url: "https://www.financecalendar.com/event/australia-labour-force-september-2026/" };
 
-test("only high-impact timed events with explicit UTC offset are accepted", () => {
+test("timed calendar events of every impact with explicit UTC offset are accepted", () => {
   const data = { events: [
     { name: event.name, time_utc: "2026-09-24T01:30:00+00:00", url: event.url, impact: "high", all_day: false, consensus: "4.5%", prior: "4.4%", actual: null },
     { name: "Minor PMI", time_utc: releaseAt, url: "https://www.financecalendar.com/event/minor-pmi/", impact: "medium", all_day: false },
     { name: "Holiday", time_utc: releaseAt, url: "https://www.financecalendar.com/event/holiday/", impact: "high", all_day: true },
     { name: "Bad time", time_utc: "2026-09-24T01:30:00", url: "https://www.financecalendar.com/event/bad-time/", impact: "high", all_day: false }
   ] };
-  assert.deepEqual(parseCalendarEvents(data), [event]);
+  assert.deepEqual(parseCalendarEvents(data), [event, { id: "https://www.financecalendar.com/event/minor-pmi/", name: "Minor PMI", country: "", releaseAt, consensus: null, prior: null, actual: null, impact: "medium", url: "https://www.financecalendar.com/event/minor-pmi/" }]);
 });
 
 test("WIB conversion and 10-minute warning window", () => {
   assert.match(formatWib(releaseAt), /08\.30 WIB/);
   const t = Date.parse(releaseAt);
   assert.equal(dueStage(event, t - 10 * 60000, {}, ["a"]), "WARNING");
-  assert.equal(dueStage(event, t - 7 * 60000, {}, ["a"]), null);
+  assert.equal(dueStage(event, t - 7 * 60000, {}, ["a"]), "WARNING");
   assert.equal(dueStage(event, t - 9 * 60000, { warnedTo: { a: 1 } }, ["a"]), null);
   assert.equal(dueStage(event, t - 9 * 60000, { warnedTo: { a: 1 } }, ["a", "b"]), "WARNING");
-  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 59000, {}, ["a"]), null);
-  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 60000, {}, ["a"]), "ACTUAL");
+  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 59000, { releaseAt }, ["a"]), null);
+  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 60000, { releaseAt }, ["a"]), "ACTUAL");
+  const medium = { ...event, impact: "medium", actual: "56.1" };
+  assert.equal(dueStage(medium, t - 9 * 60000, {}, ["a"]), null);
+  assert.equal(dueStage(medium, t + 60000, { releaseAt }, ["a"]), "ACTUAL");
+  assert.equal(dueStage(medium, t + 48 * 3600000, { releaseAt }, ["a"]), "ACTUAL");
+  assert.equal(dueStage(medium, t + 60000, {}, ["a"]), null);
 });
 
 test("forecast snapshot survives restart and post-release output is factual", () => {
@@ -66,4 +71,11 @@ test("narrative follows observed cross-asset sentiment without forcing a gold di
   assert.match(falling.narrative, /tekanan suku bunga.*mereda/);
   assert.notEqual(rising.narrative, falling.narrative);
   assert.match(rising.narrative, /bukan bukti reaksi khusus/);
+});
+
+test("non-high result is news without a three-star warning label", () => {
+  const medium = { ...event, impact: "medium", actual: "56.1" };
+  const message = formatCalendarMessage(medium, "ACTUAL", calendarNarrative(medium, "ACTUAL", ""));
+  assert.match(message, /HASIL BERITA KALENDER/);
+  assert.doesNotMatch(message, /3 BINTANG|⭐⭐⭐|U READY4/);
 });
