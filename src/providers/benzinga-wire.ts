@@ -55,7 +55,7 @@ const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 // clear of anything reasonable for a $99/mo individual plan. Raise
 // BENZINGA_POLL_SECONDS if Benzinga/Massive ever pushes back with 429s.
 const TOPICS = ["gold", "XAUUSD", "DXY", "Bullion", "Safe haven", "Federal Reserve", "FOMC", "Powell", "Warsh", "Waller", "Bowman", "Barr", "Cook", "Jefferson", "Williams", "Daly", "Bostic", "Goolsbee", "Logan", "Musalem", "Schmid", "Collins", "Hammack", "Kashkari", "CPI", "PCE", "NFP", "PPI", "GDP", "PMI", "purchasing managers", "business activity", "S&P Global US", "Treasury yields", "Treasury", "Bessent", "tariffs", "ECB", "BOE", "BOJ", "PBOC", "China", "Taiwan", "war", "Iran", "Israel", "Russia", "oil", "WTI", "Brent", "Crude Oil", "OPEC", "sanctions", "Houthi", "missile", "strike", "Trump", "Vance", "Lutnick", "Hassett", "Navarro", "Miran", "Lagarde", "Bailey", "Ueda", "Putin", "Zelenskiy", "central bank gold buying", "gold reserves", "World Gold Council", "gold demand", "gold ETF", "GLD", "COMEX gold", "gold futures positioning", "CFTC gold positioning", "de-dollarization", "gold supply", "gold premium", "gold net short", "gold net long", "XAU net short", "XAU net long", "COMEX gold net short", "COMEX gold net long", "oil net short", "oil net long", "crude net short", "crude net long", "WGC", "COT", "Commitments of Traders", "CFTC", "XAU", "XAU/USD", "COMEX", "LBMA", "Shanghai Gold Exchange", "EIA", "API crude", "OPEC+", "Aramco", "Saudi Aramco", "crude inventories", "oil inventories", "GBP", "pound sterling", "Bank of England", "CAD", "Bank of Canada", "BOC", "Macklem", "EUR", "euro", "Eurozone", "European Central Bank", "Swiss National Bank", "SNB", "ISM", "ISM Manufacturing", "ISM Services", "Retail Sales", "jobless claims", "initial claims", "housing starts", "consumer confidence", "Michigan consumer sentiment", "rig count"];
-const TOPICS_LOWER = TOPICS.map((topic) => topic.toLowerCase());
+const TOPICS_LOWER = [...TOPICS, "OECD", "mortgage rates", "mortgage applications", "Treasury buyback", "debt buyback"].map((topic) => topic.toLowerCase());
 
 type BenzingaArticle = {
       benzinga_id?: number | string;
@@ -79,7 +79,7 @@ export class BenzingaWireProvider implements NewsProvider {
     async fetchLatest(since: Date): Promise<NewsArticle[]> {
               const url = new URL("https://api.massive.com/benzinga/v2/news");
               url.searchParams.set("apiKey", this.apiKey);
-              url.searchParams.set("limit", "50");
+              url.searchParams.set("limit", "200");
               url.searchParams.set("sort", "published.desc");
 
           const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) });

@@ -8,6 +8,7 @@ function queryFor(accounts: readonly string[]): string { return [
         `(Fed OR Powell OR Warsh OR Waller OR Bowman OR Cook OR Jefferson OR Williams OR Daly OR Bostic`,
         `OR Goolsbee OR Logan OR Musalem OR Schmid OR Collins OR Hammack OR Kashkari`,
         `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU`,
+        `OR PMI OR OECD OR mortgage OR ECB OR eurozone OR GDP OR DXY OR dollar`,
         `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " ); }
 
 type XApiTweet = { id: string; text: string; created_at: string; author_id: string; conversation_id?: string; edit_history_tweet_ids?: string[]; public_metrics?: Record<string, number> };

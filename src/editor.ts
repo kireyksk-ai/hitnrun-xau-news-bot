@@ -75,11 +75,11 @@ function buildTelegramMessage(f: FormattableFields): string {
 export class Editor {
   private client: OpenAI;
   constructor(private readonly model: string, private readonly reasoningEffort: "low" | "medium" | "high", apiKey: string) { this.client = new OpenAI({ apiKey }); }
-  private async structuredDecision(article: NewsArticle, repair = false): Promise<z.infer<typeof decisionSchema>> {
+  private async structuredDecision(article: NewsArticle, repair = false, incomplete?: z.infer<typeof decisionSchema>): Promise<z.infer<typeof decisionSchema>> {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Do not change the market-intelligence judgment; provide every required field." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}` }, { role: "user", content: JSON.stringify(article) }]
+      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
     });
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
@@ -91,6 +91,12 @@ export class Editor {
       catch { throw new AIContractFailure(); }
     }
 
+    if (decision.material && (!decision.judul?.trim() || !decision.ringkasan?.trim() || !decision.dampakEmas?.trim())) {
+      try {
+        const repaired = await this.structuredDecision(article, true, decision);
+        if (repaired.material === decision.material && repaired.confidence === decision.confidence && repaired.reason === decision.reason) decision = repaired;
+      } catch { /* Keep the original safe hold if prose repair fails. */ }
+    }
     if (decision.material) {
       const { judul, ringkasan, dampakEmas } = decision;
       if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) {

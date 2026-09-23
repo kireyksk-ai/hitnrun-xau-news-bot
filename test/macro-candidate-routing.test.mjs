@@ -29,6 +29,18 @@ const plausible = [
   "CME raises COMEX gold futures margin after delivery stress."
 ];
 
+test("Treasury buyback, OECD inflation forecast and mortgage rates reach Sol for judgment", () => {
+  for (const title of [
+    "US Treasury buyback of up to $6 billion in long-term debt announced for Thursday",
+    "OECD inflation forecast for G20 raised, with more monetary tightening projected",
+    "US mortgage rates climb to 7.12%, the highest in more than two years"
+  ]) {
+    const event = assessEvent(article(title));
+    assert.notEqual(event.candidateRoute, "OBVIOUS_NOISE", title);
+    assert.equal(shouldReview(event), true, title);
+  }
+});
+
 test("unchanged Fed decision with new rate guidance is judged by Sol, not a noise keyword", () => {
   const event = assessEvent(article("Fed holds rates unchanged, but its statement signals a higher rate path next year."));
   assert.notEqual(event.candidateRoute, "OBVIOUS_NOISE");

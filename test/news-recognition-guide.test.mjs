@@ -41,3 +41,21 @@ test("additive news recognition reaches both Sol judgments without changing outp
   assert.match(calls[1].input[0].content, /ADDITIONAL CATALYST REASONING MEMORY/);
   assert.match(calls[1].input[0].content, /Return JSON only: \{material:boolean, score:integer 0-100, reason:string\}/);
 });
+
+test("incomplete material verdict gets one prose repair without changing its judgment", async () => {
+  const editor = new Editor("gpt-5.6-sol", "medium", "test-key");
+  const base = { material: true, confidence: "high", reason: "New macro fact", judul: null, ringkasan: null, dampakEmas: null };
+  const calls = [];
+  editor.client = { responses: { create: async (request) => {
+    calls.push(request);
+    return { output_text: JSON.stringify(calls.length === 1 ? base : {
+      ...base, judul: "Suku bunga hipotek AS naik", ringkasan: "Biaya pinjaman rumah meningkat menurut rilis terbaru dan dapat menekan permintaan perumahan.",
+      dampakEmas: "Pengaruh pada emas bergantung pada perubahan yield dan dolar AS. Arah belum jelas tanpa konfirmasi pasar."
+    }) };
+  } } };
+  const result = await editor.assess(article);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].input[1].content.includes('"priorDecision"'), true);
+  assert.equal(result.material, true);
+  assert.match(result.telegramMessage, /Suku bunga hipotek AS naik/);
+});
