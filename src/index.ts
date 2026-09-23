@@ -25,6 +25,9 @@ import { sequenceContext } from "./sequence-context.js";
 import { ShadowOutcomeLedger, dueShadowMarks, formatMissedReport, markShadow, rejectedButMoved } from "./shadow-outcomes.js";
 import { briefingVisuals, sendTelegramAlbum } from "./briefing-charts.js";
 import { MarketBrain } from "./brain.js";
+import { RawArchive } from "./brain-store.js";
+import { NewsHunter } from "./brain-hunter.js";
+import { mustReview, priorityOf } from "./brain-events.js";
 import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
@@ -67,10 +70,14 @@ const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
 const shadowOutcomes = new ShadowOutcomeLedger(`${config.SQLITE_PATH}.shadow-outcomes.json`);
 const briefingEditor = new Editor(config.BRIEFING_MODEL ?? config.OPENAI_MODEL, config.BRIEFING_REASONING_EFFORT, config.OPENAI_API_KEY);
+const hunter = config.BRAIN_ENABLED ? new NewsHunter(30, 3) : undefined;
+if (hunter) providers.push(hunter);
 const adminSend = async (text: string) => { if (config.TELEGRAM_ADMIN_CHAT_ID) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")); };
 const brain = config.BRAIN_ENABLED ? new MarketBrain(store, editor, { basePath: config.SQLITE_PATH, autonomy: config.AUTONOMY_LEVEL, killSwitch: config.BRAIN_KILL_SWITCH,
   aiCallsPerDay: config.BRAIN_AI_CALLS_PER_DAY, dailyLossPct: config.BRAIN_DAILY_LOSS_PCT, maxDrawdownPct: config.BRAIN_MAX_DRAWDOWN_PCT,
-  approve: config.POLICY_APPROVE, rollbackTo: config.POLICY_ROLLBACK_TO, report: adminSend, advisory: config.TELEGRAM_ADMIN_CHAT_ID ? adminSend : undefined }) : undefined;
+  approve: config.POLICY_APPROVE, rollbackTo: config.POLICY_ROLLBACK_TO, report: adminSend, advisory: config.TELEGRAM_ADMIN_CHAT_ID ? adminSend : undefined,
+  calendar: () => calendarEvents, hunter }) : undefined;
+const rawArchive = new RawArchive(`${config.SQLITE_PATH}.raw`);
 const briefings = new BriefingLedger(`${config.SQLITE_PATH}.briefings.json`);
 let briefingBusy = false; const briefingFailures = new Map<string, number>();
 let priceCache: { at: number; price?: number } = { at: 0 };
@@ -201,7 +208,8 @@ async function calendarTick(): Promise<void> {
     if (now - lastCalendarFetchAt >= 300000) {
       lastCalendarFetchAt = now;
       try {
-        calendarEvents = await fetchCalendarEvents();
+        // Owner-critical US releases (CPI, PCE, PPI, NFP, claims, FOMC...) are treated as high impact everywhere.
+        calendarEvents = (await fetchCalendarEvents()).map((e) => e.impact !== "high" && e.country === "US" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" as const } : e);
         for (const event of calendarEvents) calendarLedger.observe(event, Date.now());
         calendarLedger.prune(Date.now());
         const missingActual = calendarEvents.filter((event) => {
@@ -306,6 +314,7 @@ async function tick(): Promise<void> {
         if (articles.length) store.markProvider(provider.name, "LIVE");
         store.providerLatency(provider.name, Date.now() - now);
         for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
+          rawArchive.append(provider.name, article);
           const result = await processArticle(article, {
             store, snapshot: marketSnapshot,
             analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
@@ -313,6 +322,7 @@ async function tick(): Promise<void> {
             deliver,
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
             onSent: recordPrediction,
+            important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
             critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
             sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
               .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
@@ -353,10 +363,10 @@ async function briefingTick(): Promise<void> {
     const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since)
       .sort((a, b) => a.sentAt!.localeCompare(b.sentAt!)).slice(-60)
       .map((r) => ({ at: r.sentAt!, theme: r.event.storyKey, title: r.article.title.replace(/\s+/g, " ").slice(0, 160) }));
-    const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : ""].filter(Boolean).join(" | ");
+    const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : "", brain ? brain.macroBrief() : ""].filter(Boolean).join(" | ");
     const visuals = config.BRIEFING_CHARTS_ENABLED ? await briefingVisuals(kind, since) : { stats: "", images: [] };
     const input = { kind, nowWib: j.label, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
-      upcoming: upcomingEvents(calendarEvents, now, 24), released: releasedEvents(calendarEvents, now, hours) };
+      upcoming: upcomingEvents(calendarEvents, now, 24).map((e) => ({ ...e, history: brain?.calendarInsight(e.name) || undefined })), released: releasedEvents(calendarEvents, now, hours) };
     let checked: ReturnType<typeof validateBriefing> = { ok: false, reason: "not generated" };
     for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input)));
     // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.
@@ -381,7 +391,8 @@ async function briefingTick(): Promise<void> {
 await tick();
 if (brain) {
   await brain.regimeTick(true).catch((error) => log.warn({ err: error }, "Brain regime tick failed"));
-  setInterval(() => void (async () => { await brain.regimeTick(); await brain.markTick(); await brain.dailyTick(); })().catch((error) => log.error({ err: error }, "Brain tick failed")), 60000);
+  await brain.macroTick(true).catch((error) => log.warn({ err: error }, "Brain macro tick failed"));
+  setInterval(() => void (async () => { await brain.regimeTick(); await brain.macroTick(); await brain.markTick(); await brain.calendarTick(); await brain.dailyTick(); })().catch((error) => log.error({ err: error }, "Brain tick failed")), 60000);
   for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => { try { brain.flush(); } finally { process.exit(0); } });
 }
 setInterval(() => void briefingTick().catch((error) => log.error({ err: error }, "Briefing tick failed")), 30000);

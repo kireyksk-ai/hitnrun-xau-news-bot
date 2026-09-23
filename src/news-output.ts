@@ -43,6 +43,18 @@ export function validateNewsOutput(message: string, article: NewsArticle): Outpu
   const enWords = visible.match(/\b(the|and|said|says|will|would|could|has|have|after|before|against|between|according|announced|announces|meeting|president|government|shipping|threat|attack|policy)\b/gi) ?? [];
   if (idWords.length < 8 || idWords.length <= enWords.length * 2) return { ok: false, reason: "NEWS is not predominantly Indonesian" };
   if (!/\b(emas|xau|gold)\b/i.test(blocks[2])) return { ok: false, reason: "Gold impact paragraph missing" };
+  // Every alert must reason cause → effect, not just state a direction.
+  if (!/→|->|\b(karena|jadi|makanya|bikin|bikinnya|sehingga|akibat\w*|dampak\w*|efek\w*|imbas\w*|artinya|alhasil|otomatis|gara-gara|lantaran|kalau|klo|jika|selama|begitu|lewat|melalui|via|sebab|tekan\w*|menekan|nekan|dorong\w*|mendorong|nopang|menopang|topang\w*|angkat|ngangkat|mengangkat|bebani|membebani|beban|picu|memicu|ganjal|mengganjal|jalur\w*|bergantung|tergantung|saluran|rantai)\b/i.test(blocks[2])) return { ok: false, reason: "Gold impact lacks cause-effect reasoning" };
   return { ok: true };
 }
 
+
+/** How timid an alert reads: hedge phrases in the fact + gold blocks, and whether the gold block takes a side at all. */
+export function hedgeScore(message: string): { hedges: number; takesSide: boolean; timid: boolean } {
+  const blocks = message.trim().split(/\n\s*\n/).map((b) => plain(b));
+  const body = blocks.slice(1).join(" ").toLowerCase();
+  const gold = (blocks[2] ?? "").toLowerCase();
+  const hedges = (body.match(/berpotensi|bisa jadi|mungkin|belum jelas|perlu dipantau|patut dicermati|tergantung|bergantung|dua arah|belum tentu|masih dilihat|sulit ditebak|belum pasti|bisa saja|tidak menutup kemungkinan/g) ?? []).length;
+  const takesSide = /ketekan|tertekan|nekan|menekan|kebantu|terbantu|nopang|menopang|ketahan|tertahan|condong|bearish|bullish|naik|turun|menguat|melemah|susah napas|dapet angin|kebawa/.test(gold);
+  return { hedges, takesSide, timid: hedges >= 3 || (!takesSide && hedges >= 1) };
+}

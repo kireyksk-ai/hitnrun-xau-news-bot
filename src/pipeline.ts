@@ -1,12 +1,13 @@
 import type { NewsArticle, EditorialDecision } from "./types.js";
 import { assessEvent, shouldReview } from "./event-intelligence.js";
 import type { EventAssessment } from "./event-intelligence.js";
-import { validateNewsOutput } from "./news-output.js";
+import { hedgeScore, validateNewsOutput } from "./news-output.js";
 import { IntelligenceStore } from "./intelligence-store.js";
 import type { ReviewRecord } from "./intelligence-store.js";
 import { AIContractFailure } from "./editor.js";
 import { channel, synthesize } from "./causal-intelligence.js";
 import { policy, schedule } from "./delayed-outcomes.js";
+import { similarity, tokens } from "./shadow-outcomes.js";
 
 export type PipelineDeps = {
   store: IntelligenceStore;
@@ -21,6 +22,8 @@ export type PipelineDeps = {
   onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
   /** Optional: independent second check right before publishing (Market Brain). */
+  /** Optional: owner-priority events (playbook) that must always reach Sol, even below the importance filter. */
+  important?: (article: NewsArticle, event: EventAssessment) => boolean;
   critic?: (article: NewsArticle, event: EventAssessment, primary: EditorialDecision | undefined, reason: string) => Promise<import("./brain-episodes.js").CriticResult>;
   now?: () => Date;
 };
@@ -46,6 +49,27 @@ export function crossWireEcho(event: EventAssessment, records: ReviewRecord[], n
   });
 }
 
+/**
+ * Last duplicate guard before the groups: a fact that was already published in the
+ * last 12 hours (any wire, any wording) is not sent again. A denial, reversal or
+ * correction of that fact is new information and still goes out.
+ */
+export function sentDuplicate(event: EventAssessment, message: string, records: ReviewRecord[], now: Date): ReviewRecord | undefined {
+  // Denials, reversals, corrections and stance pivots (delta ≥ 85) are new information by definition.
+  if (/DENIAL|REVERSAL|CORRECTION/.test(String(event.changeType)) || event.informationDelta >= 85) return undefined;
+  const fact = tokens(event.fact), text = tokens(message.replace(/<[^>]+>/g, " "));
+  return records.find((r) => {
+    if (r.stage !== "SENT" || !r.sentAt || r.id === event.key) return false;
+    const age = now.getTime() - Date.parse(r.sentAt);
+    if (!(age >= 0 && age <= 12 * 3600_000)) return false;
+    const factSim = similarity(fact, tokens(r.event.fact));
+    const sameFact = factSim >= (r.event.storyKey === event.storyKey ? 0.45 : 0.6);
+    // Prose alone can look alike across different facts (same gold channels), so it only counts with overlapping facts.
+    const sameText = r.renderedMessage ? factSim >= 0.3 && similarity(text, tokens(r.renderedMessage.replace(/<[^>]+>/g, " "))) >= 0.7 : false;
+    return sameFact || sameText;
+  });
+}
+
 export async function processArticle(article: NewsArticle, deps: PipelineDeps): Promise<ReviewRecord> {
   const now = deps.now?.() ?? new Date();
   deps.store.increment("ingested");
@@ -66,7 +90,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   let record: ReviewRecord = { id: event.key, article, event, stage: "SCORE", primaryDecision: "REVIEW",
     reason: event.reasons.join("; "), audit: auditBase };
   deps.store.record(record);
-  if (!shouldReview(event, prior)) {
+  if (!shouldReview(event, prior) && !deps.important?.(article, event)) {
     const reason = event.candidateRoute === "OBVIOUS_NOISE" ? "OBVIOUS_NOISE_DROP: No plausible macro/XAU transmission" : "HARD_FILTER_REJECT: Importance/delta below threshold";
     record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason, audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
     deps.store.observeMarketEvent(article, event);
@@ -174,13 +198,35 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.record(record);
     return record;
   }
-  const outputCheck = validateNewsOutput(message, article);
+  let outputCheck = validateNewsOutput(message, article);
+  // One rewrite attempt with the exact reason, instead of losing a material alert to formatting.
+  if (!outputCheck.ok && deps.compose) {
+    try {
+      const retry = await deps.compose(article, `${primary?.material ? primary.reason : record.reason} | PERBAIKI: ${outputCheck.reason}`);
+      if (retry?.message) { const second = validateNewsOutput(retry.message, article); if (second.ok) { message = retry.message; call = retry.call ?? call; outputCheck = second; } }
+    } catch { /* keep the first failure */ }
+  }
+  // A timid alert (hedge on hedge, no side taken) gets one rewrite asking for conviction.
+  // If the rewrite is not better, the original still goes out: speed beats style.
+  if (outputCheck.ok && message && deps.compose && hedgeScore(message).timid) {
+    try {
+      const bolder = await deps.compose(article, `${primary?.material ? primary.reason : record.reason} | PERTEGAS: ambil sikap di kalimat pertama dampak emas, maksimal satu kata ragu, tetap tanpa zona/level`);
+      if (bolder?.message && validateNewsOutput(bolder.message, article).ok && !hedgeScore(bolder.message).timid) { message = bolder.message; call = bolder.call ?? call; }
+    } catch { /* keep the original */ }
+  }
   if (!outputCheck.ok) {
     record = { ...record, stage: "FORMAT", primaryDecision: "REVIEW", reason: `FORMATTER_FAILURE: ${outputCheck.reason}`, audit: { ...record.audit!, outcome: "FORMATTER_FAILURE" } };
     deps.store.record(record);
     return record;
   }
-  const newsMessage = message;
+  let newsMessage = message;
+  const already = sentDuplicate(event, newsMessage, deps.store.records(), now);
+  if (already) {
+    deps.store.increment("duplicatesRemoved"); deps.store.markProcessedIdentity(article, event.key);
+    record = { ...record, stage: "DUPLICATE", primaryDecision: "DROP", reason: `SENT_DUPLICATE of ${already.id.slice(0, 10)} (${already.article.title.slice(0, 60)})` };
+    deps.store.record(record);
+    return record;
+  }
   // Independent second check. It can only block a weak/misattributed source or a
   // stale repeat; every other objection lowers the brain's internal confidence
   // while the news itself still goes out (news speed matters more than the call).

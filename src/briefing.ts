@@ -14,7 +14,7 @@ export type BriefingInput = {
   market: string;
   /** % change of the drivers over the recap window, identical to the images sent. */
   stats?: string;
-  upcoming: Array<{ at: string; name: string; country: string; impact: string; consensus: string | null; prior: string | null }>;
+  upcoming: Array<{ at: string; name: string; country: string; impact: string; consensus: string | null; prior: string | null; history?: string }>;
   /** Calendar releases of the last 24 hours that already have an actual figure. */
   released?: Array<{ at: string; name: string; country: string; actual: string; consensus: string | null; prior: string | null }>;
 };
@@ -64,8 +64,8 @@ export function briefingPrompt(input: BriefingInput): string {
 Tulis dalam format Telegram HTML sederhana (boleh <b> saja), maksimal sekitar 350 kata, dengan bagian:
 1. Baris pembuka santai persis: "${input.kind === "PAGI" ? "☀️ Morning guys..." : "🌙 Evening guys..."}" lalu baris kedua tanggal: "${input.nowWib}". Jangan pakai kata "briefing" di teks.
 2. "Yang udah kejadian": rangkum SEMUA alert terkirim dan data RELEASED di bawah, jangan ada yang dilewat, tapi kelompokkan per alur cerita (misal Fed/data AS, dolar-yield, Iran-minyak, dagang) jadi 3-6 poin. Tiap poin sebab-akibat ke XAU, bukan daftar judul. Untuk data yang sudah rilis, sebut aktual vs perkiraan dan artinya buat emas.
-3. "Posisi sekarang": timbang DXY, yield, minyak, XAU dari data pasar yang diberikan; bilang timbangan condong ke mana, atau tabrakan.
-4. "Yang perlu lo pantau": analisa jadwal dari daftar UPCOMING (jam WIB, 24 jam ke depan). Dahulukan dampak tinggi. Untuk tiap event penting sebut perkiraan dan sebelumnya bila ada, lalu jelaskan skenario buat emas kalau angkanya lebih tinggi atau lebih rendah dari perkiraan, dan kaitkan dengan alur cerita di atas (menguatkan atau membalik). Event dampak sedang cukup disebut singkat. Kalau daftar kosong, bilang terus terang gak ada rilis besar dan tema apa yang masih jalan.
+3. "Posisi sekarang": timbang DXY, yield, minyak, XAU dari data pasar yang diberikan; bilang timbangan condong ke mana, atau tabrakan. Kalau ada MACRO_LINKAGE, bilang emas lagi main logika rate atau logika bank sentral, dan kubu mana yang lagi menang di BATTLE.
+4. "Yang perlu lo pantau": analisa jadwal dari daftar UPCOMING (jam WIB, 24 jam ke depan). Dahulukan dampak tinggi. Untuk tiap event penting sebut perkiraan dan sebelumnya bila ada, lalu jelaskan skenario buat emas kalau angkanya lebih tinggi atau lebih rendah dari perkiraan, dan kaitkan dengan alur cerita di atas (menguatkan atau membalik). Event dampak sedang cukup disebut singkat. Kalau ada catatan "historis" di jadwal, pakai itu buat bilang biasanya emas bereaksi gimana (sebut sebagai kebiasaan, bukan kepastian). Kalau daftar kosong, bilang terus terang gak ada rilis besar dan tema apa yang masih jalan.
 5. Satu kalimat penutup: tema besar yang lagi nyetir emas.
 Aturan keras: pakai hanya fakta di bawah, jangan ngarang angka, konsensus, atau kejadian. Tanpa zona, level harga, entry, target, stop-loss, atau ajakan beli/jual. Tanpa kata "pasti" atau "dijamin". Tanpa link, tanpa nama media, tanpa daftar sumber, dan jangan pernah menyebut "bot" atau "AI". Pakai gaya HITNRUN VOICE.
 
@@ -82,7 +82,7 @@ DATA PASAR SEKARANG: ${input.market || "(tidak tersedia; jangan menyebut angka p
 ${input.stats ? `${input.stats}\nGambar statistik ikut dikirim di atas teks; boleh bilang "lihat chart di atas". Angka persen di teks harus sama dengan baris ini.` : ""}
 
 UPCOMING (kalender 24 jam ke depan, jadwal WIB, dengan perkiraan/sebelumnya bila ada):
-${input.upcoming.length ? input.upcoming.map((e) => `${e.at} | ${e.country} ${e.name} | dampak ${e.impact} | perkiraan ${e.consensus ?? "-"} | sebelumnya ${e.prior ?? "-"}`).join("\n") : "(tidak ada rilis penting dalam jendela ini)"}`;
+${input.upcoming.length ? input.upcoming.map((e) => `${e.at} | ${e.country} ${e.name} | dampak ${e.impact} | perkiraan ${e.consensus ?? "-"} | sebelumnya ${e.prior ?? "-"}${e.history ? ` | ${e.history}` : ""}`).join("\n") : "(tidak ada rilis penting dalam jendela ini)"}`;
 }
 
 /** Last gate before a briefing reaches the group. Output is safe Telegram HTML (only <b> survives). */

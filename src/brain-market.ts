@@ -8,10 +8,13 @@ const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
  * accurately even if the worker restarted in between (1-minute data covers ~5 days).
  */
 export const BRAIN_ASSETS = {
-  XAU: ["GC=F"], DXY: ["DX-Y.NYB"], US2Y: ["2YY=F", "^UST2Y"], US10Y: ["^TNX"], WTI: ["CL=F"], VIX: ["^VIX"], SPX: ["^GSPC"]
+  XAU: ["GC=F"], DXY: ["DX-Y.NYB"], US2Y: ["2YY=F", "^UST2Y"], US10Y: ["^TNX"], WTI: ["CL=F"], VIX: ["^VIX"], SPX: ["^GSPC"],
+  // Macro-only (daily/hourly): 30-year yield and 30-day fed funds futures (implied rate = 100 - price).
+  US30Y: ["^TYX"], FEDFUNDS: ["ZQ=F"]
 } as const;
 export type Asset = keyof typeof BRAIN_ASSETS;
-export const ASSETS = Object.keys(BRAIN_ASSETS) as Asset[];
+/** Assets read every minute for episodes and marks. */
+export const ASSETS: Asset[] = ["XAU", "DXY", "US2Y", "US10Y", "WTI", "VIX", "SPX"];
 export type Bar = [number, number]; // [epoch ms, close]
 export type MarketState = Partial<Record<Asset, number>>;
 export type DataHealth = { ok: boolean; fresh: Asset[]; stale: Asset[]; missing: Asset[]; note: string };
@@ -33,9 +36,9 @@ async function yahoo(symbol: string, interval: string, range: string, fetcher: F
 }
 
 /** Bars for an asset; tries fallback symbols once and remembers the one that works. */
-export async function series(asset: Asset, interval: "1m" | "5m" | "60m", fetcher: Fetcher = fetch): Promise<Bar[]> {
-  const range = interval === "1m" ? "5d" : interval === "5m" ? "1mo" : "3mo";
-  const ttl = interval === "1m" ? 55_000 : interval === "5m" ? 240_000 : 900_000;
+export async function series(asset: Asset, interval: "1m" | "5m" | "60m" | "1d", fetcher: Fetcher = fetch): Promise<Bar[]> {
+  const range = interval === "1m" ? "5d" : interval === "5m" ? "1mo" : interval === "60m" ? "3mo" : "1y";
+  const ttl = interval === "1m" ? 55_000 : interval === "5m" ? 240_000 : interval === "60m" ? 900_000 : 3600_000;
   const symbols = workingSymbol.has(asset) ? [workingSymbol.get(asset)!] : [...BRAIN_ASSETS[asset]];
   for (const symbol of symbols) {
     const key = `${symbol}|${interval}`;
@@ -86,9 +89,10 @@ export async function dataHealth(now = Date.now(), fetcher: Fetcher = fetch): Pr
 /** Percent change (yields: basis points) between two values of an asset. */
 export function move(asset: Asset, from?: number, to?: number): number | undefined {
   if (from === undefined || to === undefined || !(from > 0)) return undefined;
-  return asset === "US2Y" || asset === "US10Y" ? (to - from) * 100 : (to - from) / from * 100;
+  if (asset === "FEDFUNDS") return -(to - from) * 100; // futures price down = implied rate up (bp)
+  return asset === "US2Y" || asset === "US10Y" || asset === "US30Y" ? (to - from) * 100 : (to - from) / from * 100;
 }
-export const unit = (asset: Asset) => asset === "US2Y" || asset === "US10Y" ? "bp" : "%";
+export const unit = (asset: Asset) => asset === "US2Y" || asset === "US10Y" || asset === "US30Y" || asset === "FEDFUNDS" ? "bp" : "%";
 
 /** Realised XAU volatility: std of 1-minute % returns over the last `minutes`. */
 export function realisedVol(bars: Bar[], endTs: number, minutes = 60): number | undefined {
@@ -101,18 +105,20 @@ export function realisedVol(bars: Bar[], endTs: number, minutes = 60): number | 
 }
 
 /** Pearson correlation of bar-to-bar changes of two aligned series. */
-export function correlation(a: Bar[], b: Bar[], sinceTs: number): { r: number; n: number } | undefined {
-  const bMap = new Map(b.map(([t, v]) => [Math.round(t / 3600_000), v]));
+export function correlation(a: Bar[], b: Bar[], sinceTs: number, bucketMs = 3600_000, minPairs = 12): { r: number; n: number } | undefined {
+  // Daily bars of different markets open at different hours: bucket by calendar day (floor); hourly by nearest hour.
+  const key = (t: number) => bucketMs >= 86400_000 ? Math.floor(t / bucketMs) : Math.round(t / bucketMs);
+  const bMap = new Map(b.map(([t, v]) => [key(t), v]));
   const pairs: Array<[number, number]> = [];
   let prev: [number, number] | undefined;
   for (const [t, v] of a) {
     if (t < sinceTs) continue;
-    const w = bMap.get(Math.round(t / 3600_000));
+    const w = bMap.get(key(t));
     if (w === undefined) { prev = undefined; continue; }
     if (prev) pairs.push([(v - prev[0]) / prev[0], (w - prev[1]) / prev[1]]);
     prev = [v, w];
   }
-  if (pairs.length < 12) return undefined;
+  if (pairs.length < minPairs) return undefined;
   const mx = pairs.reduce((s, p) => s + p[0], 0) / pairs.length, my = pairs.reduce((s, p) => s + p[1], 0) / pairs.length;
   let sxy = 0, sxx = 0, syy = 0;
   for (const [x, y] of pairs) { sxy += (x - mx) * (y - my); sxx += (x - mx) ** 2; syy += (y - my) ** 2; }

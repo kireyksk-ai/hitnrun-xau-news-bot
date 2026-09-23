@@ -39,6 +39,7 @@ export type Episode = {
   candidate?: { policyVersion: string; action: Action; direction: Direction; confidence: number };
   marks: Partial<Record<`${MarkMinute}`, EpisodeMark>>;
   label?: Label; lessonKeys?: string[];
+  macro?: { linkage: "RATE" | "CB" | "MIXED"; score: number; ruleBias: "BULLISH" | "BEARISH" | "NEUTRAL"; leader: string };
 };
 
 const LITE_MARKS: MarkMinute[] = [5, 15, 60];
