@@ -94,5 +94,5 @@ test("premium provenance is compact, update-aware, and never makes popularity ma
   assert.equal(e.marketMateriality, 85); // derives from the Fed/rates channel, never metrics.
   assert.equal(sourceClassFor("DeItaone"), "FAST_WIRE"); assert.equal(sourceClassFor("unknown"), "UNVERIFIED_CLAIM");
   assert.equal(runtimeActorRegistry('[{"username":"FedTest","sourceClass":"OFFICIAL_DIRECT_STATEMENT","actor":"Federal Reserve","direct":true}]').at(-1).username, "FedTest");
-  assert.equal(runtimeActorRegistry('[{"username":"bad handle!"}]').length, 7);
+  assert.equal(runtimeActorRegistry('[{"username":"bad handle!"}]').length, 11);
 });
