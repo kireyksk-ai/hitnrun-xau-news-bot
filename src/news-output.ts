@@ -33,6 +33,8 @@ export function validateNewsOutput(message: string, article: NewsArticle): Outpu
   if (/\b(importance|urgency|new_information|source scoring|reasoning internal|score\s*\d+\s*\/\s*100|level dampak|bias dampak)\b/i.test(visible)) {
     return { ok: false, reason: "Internal metadata leaked into NEWS" };
   }
+  // The Market Brain's internal action (BUY/SELL/WAIT/NO_TRADE) must never reach the groups.
+  if (/\b(?:BUY|SELL|NO[_ -]TRADE)\b|keputusan internal|keputusanInternal/.test(visible)) return { ok: false, reason: "Internal brain action leaked into NEWS" };
   if (/https?:\/\/|www\.|\b(?:Reuters|Bloomberg|Politico|Truth Social)\s*[:—-]/i.test(visible)) return { ok: false, reason: "Raw source attribution or link in NEWS" };
   if (copiesSource(message, article)) return { ok: false, reason: "NEWS copies source text" };
   const idWords = visible.match(/\b(gw|lo|kita|gak|gk|klo|udah|belom|blm|yg|tp|jg|lg|bs|abis|bakal|doang|malah|makanya|intinya|kayak|emang|jadi|apa|baru|terjadi|trump|mengatakan|terbuka|bertemu|pertemuan|dengan|ini|karena|jalur|diplomasi|buat|emas|risiko|perang|bisa|kalau|hanya|tanpa|belum|jelas|dampak|pasar|suku|bunga|harga|naik|turun|tekanan|menjadi|akan|sementara|tetap|sehingga|terhadap|dari|pada|yang|dan|di|ke|untuk|sebagai|masih|lebih|dapat|sedang|setelah|sebelum|jika|namun|tetapi)\b/gi) ?? [];

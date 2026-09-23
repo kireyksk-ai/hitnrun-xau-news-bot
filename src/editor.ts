@@ -4,6 +4,8 @@ import type { EditorialDecision, NewsArticle } from "./types.js";
 import type { EventAssessment, StoryState } from "./event-intelligence.js";
 import { SEQUENCE_REASONING_GUIDE } from "./sequence-context.js";
 import { REJECTED_OUTCOME_GUIDE } from "./shadow-outcomes.js";
+import { EXPERIENCE_GUIDE } from "./brain-retrieval.js";
+import type { CriticResult, InternalAssessment } from "./brain-episodes.js";
 
 // The AI occasionally returns a valid-but-incomplete JSON object. Treat that
 // as a safe rejection instead of throwing, otherwise the same article is
@@ -16,7 +18,18 @@ const decisionSchema = z.object({
   // failing the whole decision (which would hold a material alert).
   potensiArah: z.string().nullable().optional(),
   keyakinan: z.number().nullable().optional(),
-  horizonJam: z.number().nullable().optional()
+  horizonJam: z.number().nullable().optional(),
+  // Internal Market Brain assessment. Never published; recorded and scored only.
+  keputusanInternal: z.string().nullable().optional(),
+  buktiPendukung: z.array(z.string()).nullable().optional(),
+  buktiBertentangan: z.array(z.string()).nullable().optional(),
+  kondisiAktivasi: z.string().nullable().optional(),
+  invalidasi: z.string().nullable().optional(),
+  risikoUtama: z.string().nullable().optional(),
+  katalisBerikutnya: z.string().nullable().optional(),
+  alasanPasar: z.string().nullable().optional(),
+  bedaDenganMasaLalu: z.string().nullable().optional(),
+  narasiDominan: z.string().nullable().optional()
 }).strict();
 const decisionJsonSchema = {
   type: "object", additionalProperties: false,
@@ -25,9 +38,31 @@ const decisionJsonSchema = {
     reason: { type: "string" }, judul: { type: ["string", "null"] },
     ringkasan: { type: ["string", "null"] }, dampakEmas: { type: ["string", "null"] },
     potensiArah: { type: ["string", "null"], description: "BULLISH, BEARISH, TWO_WAY or UNCLEAR" },
-    keyakinan: { type: ["integer", "null"], description: "50-90" }, horizonJam: { type: ["integer", "null"], description: "1, 4 or 24" }
-  }, required: ["material", "confidence", "reason", "judul", "ringkasan", "dampakEmas", "potensiArah", "keyakinan", "horizonJam"]
+    keyakinan: { type: ["integer", "null"], description: "50-90" }, horizonJam: { type: ["integer", "null"], description: "1, 4 or 24" },
+    keputusanInternal: { type: ["string", "null"], description: "INTERNAL ONLY, never written in the Telegram text: BUY, SELL, WAIT or NO_TRADE. WAIT/NO_TRADE whenever data is missing, late, stale or conflicting; NO_TRADE when material=false" },
+    buktiPendukung: { type: ["array", "null"], items: { type: "string" }, description: "1-4 short facts supporting the potential direction" },
+    buktiBertentangan: { type: ["array", "null"], items: { type: "string" }, description: "1-4 short facts against it" },
+    kondisiAktivasi: { type: ["string", "null"], description: "what market behaviour would confirm the view (cross-asset, not a price level)" },
+    invalidasi: { type: ["string", "null"], description: "what would prove the view wrong (event or cross-asset behaviour, not a price level)" },
+    risikoUtama: { type: ["string", "null"] }, katalisBerikutnya: { type: ["string", "null"] },
+    alasanPasar: { type: ["string", "null"], description: "why the market is likely to follow or reject this narrative" },
+    bedaDenganMasaLalu: { type: ["string", "null"], description: "most important difference versus the closest past episode, and whether the old pattern applies" },
+    narasiDominan: { type: ["string", "null"], description: "the dominant market narrative this item belongs to" }
+  }, required: ["material", "confidence", "reason", "judul", "ringkasan", "dampakEmas", "potensiArah", "keyakinan", "horizonJam",
+    "keputusanInternal", "buktiPendukung", "buktiBertentangan", "kondisiAktivasi", "invalidasi", "risikoUtama", "katalisBerikutnya", "alasanPasar", "bedaDenganMasaLalu", "narasiDominan"]
 };
+/** Sol's internal assessment (never published). */
+export function internalFrom(d: z.infer<typeof decisionSchema>): import("./brain-episodes.js").InternalAssessment | undefined {
+  const call = goldCallFrom(d);
+  const raw = d.keputusanInternal?.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  const action = raw === "BUY" || raw === "SELL" || raw === "WAIT" || raw === "NO_TRADE" ? raw : d.material ? "WAIT" : "NO_TRADE";
+  if (!call && !d.material) return { action: "NO_TRADE", direction: "UNCLEAR", confidence: 50, horizonMinutes: 60, evidenceFor: [], evidenceAgainst: [] };
+  const list = (v?: string[] | null) => (v ?? []).map((x) => x.trim()).filter(Boolean).slice(0, 4);
+  const text = (v?: string | null) => v?.trim() || undefined;
+  return { action, direction: call?.direction ?? "UNCLEAR", confidence: call?.confidence ?? 50, horizonMinutes: call?.horizonMinutes ?? 240,
+    evidenceFor: list(d.buktiPendukung), evidenceAgainst: list(d.buktiBertentangan), activation: text(d.kondisiAktivasi), invalidation: text(d.invalidasi),
+    mainRisk: text(d.risikoUtama), nextCatalyst: text(d.katalisBerikutnya), marketAcceptance: text(d.alasanPasar), pastDifference: text(d.bedaDenganMasaLalu), narrative: text(d.narasiDominan) };
+}
 export class AIContractFailure extends Error { constructor(message = "AI structured response invalid after repair retry") { super(message); this.name = "AIContractFailure"; } }
 // Additive recognition examples from the owner's XAU classifier. They inform
 // semantic judgment; they do not replace the existing publication contract.
@@ -85,7 +120,7 @@ When material=true, write ONLY three clean fields in the owner's everyday Indone
 - dampakEmas: concrete causal path to gold, including counterforce/uncertainty where appropriate, around 35-90 words. If direction is unclear, say "arah emas belum jelas". Do not force a 1-4 hour prediction.
 The final NEWS post will be ⚠️ JUDUL, then ringkasan, then dampakEmas. Target 80-180 words total. Never include importance/urgency, classifier labels, debug data, source names, URLs, or raw English in these fields. If unable to produce safe Indonesian prose, return material=true with any missing field null; it will be held for admin review, never replaced with raw source text.
 POTENTIAL DIRECTION (measured later against XAU; this builds the public track record): when material=true also set potensiArah, keyakinan and horizonJam. potensiArah=BULLISH or BEARISH only when the causal chain AND the supplied live readings point the same way; use TWO_WAY when strong forces conflict and UNCLEAR when evidence is thin. keyakinan is an honest 50-90 probability that gold moves that way by the horizon (never above 90; 55-65 is normal for news). horizonJam is 1, 4 or 24: the window in which the effect should show. This is a potential, never a trading instruction: never write entries, zones, levels, targets, stop-loss or buy/sell advice anywhere.
-When material=false, leave judul, ringkasan, dampakEmas, potensiArah, keyakinan and horizonJam null.
+When material=false, leave judul, ringkasan, dampakEmas, potensiArah, keyakinan and horizonJam null, set keputusanInternal to NO_TRADE, and leave the other internal fields null except narasiDominan.
 Never mention that this is a bot or an automated message. Return JSON only.`;
 
 
@@ -134,7 +169,7 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? `Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts in the voice below, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text.\n\n${HITNRUN_VOICE_GUIDE}` : `${instructions}\n\n${HITNRUN_VOICE_GUIDE}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
+      input: [{ role: "developer", content: repair ? `Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts in the voice below, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text.\n\n${HITNRUN_VOICE_GUIDE}` : `${instructions}\n\n${HITNRUN_VOICE_GUIDE}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}\n\n${EXPERIENCE_GUIDE}\n\n${INTERNAL_DECISION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
     });
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
@@ -158,13 +193,13 @@ export class Editor {
     if (decision.material) {
       const { judul, ringkasan, dampakEmas } = decision;
       if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) {
-        return { material: true, confidence: decision.confidence, reason: `${decision.reason}; Indonesian NEWS formatting incomplete`, telegramMessage: null };
+        return { material: true, confidence: decision.confidence, reason: `${decision.reason}; Indonesian NEWS formatting incomplete`, telegramMessage: null, internal: internalFrom(decision) };
       }
       const call = goldCallFrom(decision);
       const telegramMessage = buildTelegramMessage({ judul, ringkasan, dampakEmas }, call);
-      return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage, call };
+      return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage, call, internal: internalFrom(decision) };
     }
-    return { material: false, confidence: decision.confidence, reason: decision.reason, telegramMessage: null };
+    return { material: false, confidence: decision.confidence, reason: decision.reason, telegramMessage: null, internal: internalFrom(decision) };
   }
 
   /**
@@ -173,7 +208,8 @@ export class Editor {
    * while the primary pass returned no prose). It never judges materiality.
    */
   async compose(article: NewsArticle, reason: string): Promise<{ message: string; call?: GoldCall } | null> {
-    const approved = { material: true, confidence: "medium" as const, reason, judul: null, ringkasan: null, dampakEmas: null, potensiArah: null, keyakinan: null, horizonJam: null };
+    const approved = { material: true, confidence: "medium" as const, reason, judul: null, ringkasan: null, dampakEmas: null, potensiArah: null, keyakinan: null, horizonJam: null,
+      keputusanInternal: null, buktiPendukung: null, buktiBertentangan: null, kondisiAktivasi: null, invalidasi: null, risikoUtama: null, katalisBerikutnya: null, alasanPasar: null, bedaDenganMasaLalu: null, narasiDominan: null };
     const written = await this.structuredDecision(article, true, approved);
     const { judul, ringkasan, dampakEmas } = written;
     if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) return null;
@@ -194,6 +230,72 @@ export class Editor {
     return z.object({ material: z.boolean(), score: z.number().int().min(0).max(100), reason: z.string() }).parse(JSON.parse(raw));
   }
 
+  /**
+   * Independent second check of a decision that is about to be published: looks
+   * only for reasons it is wrong (source, pre-move, priced-in, whipsaw, cross-market
+   * conflict). Fast reasoning effort so it adds seconds, not minutes.
+   */
+  async critic(input: { article: NewsArticle; decision: InternalAssessment | undefined; reason: string; context: string }): Promise<CriticResult> {
+    const schema = { type: "object", additionalProperties: false, properties: {
+      verdict: { type: "string", enum: ["PASS", "DOWNGRADE", "BLOCK"] }, reasons: { type: "array", items: { type: "string" } },
+      pricedIn: { type: "boolean" }, preMoved: { type: "boolean" }, whipsawRisk: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
+      sourceIssue: { type: "boolean" }, crossMarketConflict: { type: "boolean" },
+      adjustedConfidence: { type: ["integer", "null"] }, adjustedAction: { type: ["string", "null"], enum: ["BUY", "SELL", "WAIT", "NO_TRADE", null] }
+    }, required: ["verdict", "reasons", "pricedIn", "preMoved", "whipsawRisk", "sourceIssue", "crossMarketConflict", "adjustedConfidence", "adjustedAction"] };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", name: "decision_critic", strict: true, schema } } as never,
+      input: [{ role: "developer", content: CRITIC_GUIDE }, { role: "user", content: JSON.stringify(input) }]
+    });
+    const raw = JSON.parse(response.output_text) as CriticResult & { adjustedConfidence: number | null; adjustedAction: CriticResult["adjustedAction"] | null };
+    return { ...raw, reasons: raw.reasons.slice(0, 5), adjustedConfidence: raw.adjustedConfidence ?? undefined, adjustedAction: raw.adjustedAction ?? undefined };
+  }
+
+  /** Turns one labeled mistake into a sharper, reusable lesson. */
+  async lesson(input: Record<string, unknown>): Promise<{ lesson: string; conditions: string }> {
+    const schema = { type: "object", additionalProperties: false, properties: { lesson: { type: "string" }, conditions: { type: "string" } }, required: ["lesson", "conditions"] };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "medium" },
+      text: { format: { type: "json_schema", name: "brain_lesson", strict: true, schema } } as never,
+      input: [{ role: "developer", content: LESSON_GUIDE }, { role: "user", content: JSON.stringify(input) }]
+    });
+    const out = JSON.parse(response.output_text) as { lesson: string; conditions: string };
+    return { lesson: out.lesson.slice(0, 400), conditions: out.conditions.slice(0, 240) };
+  }
+
+  /** Proposes a candidate policy (bounded knobs + short prompt notes) from measured performance and lessons. */
+  async proposePolicy(input: Record<string, unknown>): Promise<{ knobs: Record<string, number | boolean>; notes: string; rationale: string } | null> {
+    const schema = { type: "object", additionalProperties: false, properties: {
+      change: { type: "boolean" },
+      minTradeConfidence: { type: ["integer", "null"] }, preMoveWaitPct: { type: ["number", "null"] }, waitOnCriticDowngrade: { type: ["boolean", "null"] },
+      halfLifeDays: { type: ["integer", "null"] }, regimeBoost: { type: ["number", "null"] }, notes: { type: "string" }, rationale: { type: "string" }
+    }, required: ["change", "minTradeConfidence", "preMoveWaitPct", "waitOnCriticDowngrade", "halfLifeDays", "regimeBoost", "notes", "rationale"] };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "high" },
+      text: { format: { type: "json_schema", name: "policy_proposal", strict: true, schema } } as never,
+      input: [{ role: "developer", content: POLICY_GUIDE }, { role: "user", content: JSON.stringify(input) }]
+    });
+    const out = JSON.parse(response.output_text) as Record<string, unknown>;
+    if (!out.change) return null;
+    const knobs: Record<string, number | boolean> = {};
+    for (const k of ["minTradeConfidence", "preMoveWaitPct", "waitOnCriticDowngrade", "halfLifeDays", "regimeBoost"]) if (out[k] !== null && out[k] !== undefined) knobs[k] = out[k] as number | boolean;
+    return { knobs, notes: String(out.notes ?? ""), rationale: String(out.rationale ?? "") };
+  }
+
+  /** Shadow decision of a candidate policy's prompt notes (direction/confidence/action only; never published). */
+  async candidateDecision(article: NewsArticle, notes: string): Promise<{ direction: InternalAssessment["direction"]; confidence: number; action: InternalAssessment["action"] }> {
+    const schema = { type: "object", additionalProperties: false, properties: {
+      direction: { type: "string", enum: ["BULLISH", "BEARISH", "TWO_WAY", "UNCLEAR"] }, confidence: { type: "integer" },
+      action: { type: "string", enum: ["BUY", "SELL", "WAIT", "NO_TRADE"] } }, required: ["direction", "confidence", "action"] };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", name: "candidate_decision", strict: true, schema } } as never,
+      input: [{ role: "developer", content: `Internal shadow assessment of the gold (XAU) impact of this news, used only to test a candidate policy. Never published.\n\n${INTERNAL_DECISION_GUIDE}\n\nCANDIDATE POLICY NOTES:\n${notes}` }, { role: "user", content: JSON.stringify(article) }]
+    });
+    const out = JSON.parse(response.output_text) as { direction: InternalAssessment["direction"]; confidence: number; action: InternalAssessment["action"] };
+    return { ...out, confidence: Math.max(50, Math.min(90, out.confidence)) };
+  }
+
   /** Scheduled desk briefing (morning / 21:00 WIB). Plain Telegram HTML text, validated by the caller. */
   async briefing(prompt: string): Promise<string> {
     const response = await this.client.responses.create({
@@ -206,3 +308,9 @@ export class Editor {
     return response.output_text.trim();
   }
 }
+
+export const INTERNAL_DECISION_GUIDE = `INTERNAL MARKET-BRAIN ASSESSMENT (recorded and scored privately; NEVER written into judul, ringkasan or dampakEmas):
+keputusanInternal is BUY, SELL, WAIT or NO_TRADE for XAU. You are never obliged to take a side: use WAIT when the direction is plausible but unconfirmed, the price already moved before this item, cross-market signals (DXY, yields, oil) conflict, the source is weak, or data is missing/stale; use NO_TRADE when the item is not material. BUY only with a BULLISH potensiArah and SELL only with BEARISH. Fill buktiPendukung and buktiBertentangan with concrete facts from the input, kondisiAktivasi and invalidasi as observable events or cross-asset behaviour (never price levels, zones, entries, stops or targets), risikoUtama, katalisBerikutnya, alasanPasar (why the market may follow or reject the narrative) and narasiDominan. The Telegram fields must contain no BUY/SELL/WAIT wording.`;
+export const CRITIC_GUIDE = `You are the independent second check of a gold (XAU) news decision that is about to be published. Your only job is to find reasons it is wrong. Check: (1) source quality and whether the claim is verified or misattributed; (2) whether XAU already moved in the called direction before the news (see the supplied pre-move numbers) so it is priced in; (3) whether DXY, yields or oil contradict the call; (4) whipsaw risk (thin session, conflicting headlines, first-move reversals); (5) whether the narrative is already stale. Return PASS if the decision holds, DOWNGRADE with a lower adjustedConfidence and/or adjustedAction WAIT when it is weaker than claimed, BLOCK only when the source is unverifiable or misattributed or the item is a stale repeat. Use only supplied facts; never invent prices. Reasons are short Indonesian phrases.`;
+export const LESSON_GUIDE = `You write one lesson for a gold (XAU) news market-brain from a mistake that was measured objectively. Input: the news, the regime, what the brain decided, the critic, the pre-move and the measured XAU/DXY/yield reaction, the outcome label and the draft lesson. Write lesson: one or two concrete Indonesian sentences (max 45 words) stating what to do differently next time in this kind of situation (a checkable rule of thumb, not a platitude, no price levels, no trading instructions). Write conditions: when the lesson applies (catalyst, regime, session, pre-move, source). Use only supplied facts.`;
+export const POLICY_GUIDE = `You review the measured performance of a gold news market-brain (accuracy by horizon, calibration, paper expectancy after costs, drawdown, false alerts, missed news, per catalyst and per regime) and its stored lessons, and decide whether to PROPOSE a candidate policy. Only propose when the evidence is specific and sample sizes are meaningful; otherwise change=false. Knobs (null = keep): minTradeConfidence (55-85), preMoveWaitPct (0.1-0.6), waitOnCriticDowngrade, halfLifeDays (7-120), regimeBoost (1-3). notes: at most 8 short English lines of additional reasoning guidance for the decision prompt, derived from repeated lessons (empty string when none). rationale: why, citing the numbers. The candidate will be replayed on history and shadow-tested; it is never applied directly.`;

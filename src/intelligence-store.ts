@@ -9,12 +9,12 @@ import type { AbnormalInvestigation, CausalGraph } from "./causal-intelligence.j
 import type { Checkpoint } from "./delayed-outcomes.js";
 import { learningContext } from "./learning-context.js";
 
-export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT";
+export type DecisionStage = "SOURCE" | "NORMALIZE" | "DUPLICATE" | "DELTA" | "SCORE" | "AI" | "AI_CONTRACT_FAILURE" | "SHADOW" | "FORMAT" | "ROUTING" | "SENT" | "CRITIC";
 export type ReviewRecord = {
   id: string; article: NewsArticle; event: EventAssessment; stage: DecisionStage;
   primaryDecision: "SEND" | "DROP" | "REVIEW"; reason: string;
   shadowDecision?: "SEND" | "DROP"; shadowScore?: number;
-  renderedMessage?: string;
+  renderedMessage?: string; brain?: { internal?: import("./brain-episodes.js").InternalAssessment; critic?: import("./brain-episodes.js").CriticResult };
   sentAt?: string; telegramMessageIds?: Record<string, number>;
   adminDecision?: "FALSE_NEGATIVE" | "FALSE_POSITIVE"; adminReason?: string;
   audit?: { provider: string; normalizedEvent: string; prefilter: "REVIEW" | "REJECT"; storyMatch: string;

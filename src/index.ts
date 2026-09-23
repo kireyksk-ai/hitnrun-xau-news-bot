@@ -24,6 +24,8 @@ import { formatDailyLearningReview } from "./daily-learning-review.js";
 import { sequenceContext } from "./sequence-context.js";
 import { ShadowOutcomeLedger, dueShadowMarks, formatMissedReport, markShadow, rejectedButMoved } from "./shadow-outcomes.js";
 import { briefingVisuals, sendTelegramAlbum } from "./briefing-charts.js";
+import { MarketBrain } from "./brain.js";
+import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
 import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
@@ -65,6 +67,10 @@ const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
 const shadowOutcomes = new ShadowOutcomeLedger(`${config.SQLITE_PATH}.shadow-outcomes.json`);
 const briefingEditor = new Editor(config.BRIEFING_MODEL ?? config.OPENAI_MODEL, config.BRIEFING_REASONING_EFFORT, config.OPENAI_API_KEY);
+const adminSend = async (text: string) => { if (config.TELEGRAM_ADMIN_CHAT_ID) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")); };
+const brain = config.BRAIN_ENABLED ? new MarketBrain(store, editor, { basePath: config.SQLITE_PATH, autonomy: config.AUTONOMY_LEVEL, killSwitch: config.BRAIN_KILL_SWITCH,
+  aiCallsPerDay: config.BRAIN_AI_CALLS_PER_DAY, dailyLossPct: config.BRAIN_DAILY_LOSS_PCT, maxDrawdownPct: config.BRAIN_MAX_DRAWDOWN_PCT,
+  approve: config.POLICY_APPROVE, rollbackTo: config.POLICY_ROLLBACK_TO, report: adminSend, advisory: config.TELEGRAM_ADMIN_CHAT_ID ? adminSend : undefined }) : undefined;
 const briefings = new BriefingLedger(`${config.SQLITE_PATH}.briefings.json`);
 let briefingBusy = false; const briefingFailures = new Map<string, number>();
 let priceCache: { at: number; price?: number } = { at: 0 };
@@ -255,6 +261,7 @@ async function pollAdmin(): Promise<void> {
       else if (input === "/learning") await reply(formatLearningStatus(store));
       else if (input === "/learned") await reply(formatDailyLearningReview(store));
       else if (input === "/missed") await reply(formatMissedReport(shadowOutcomes.all(), new Date()));
+      else if (input === "/brain") await reply(brain?.status() ?? "Market Brain nonaktif")
       else if (input === "/rapor") await reply(formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir"));
       else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
@@ -306,11 +313,13 @@ async function tick(): Promise<void> {
             deliver,
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
             onSent: recordPrediction,
-            sequence: (event) => sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
+            critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
+            sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
               .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
-              { shadow: shadowOutcomes.all(), fact: event.fact })
+              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? ""].filter(Boolean).join("\n\n")
           });
           try { await rememberOutcome(result); } catch (error) { log.warn({ err: error }, "Outcome memory failed"); }
+          try { await brain?.onResult(result); } catch (error) { log.warn({ err: error }, "Brain episode failed"); }
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
             importance: result.event.importance, urgency: result.event.urgency, reason: result.reason }, "Event processed");
         }
@@ -344,7 +353,7 @@ async function briefingTick(): Promise<void> {
     const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since)
       .sort((a, b) => a.sentAt!.localeCompare(b.sentAt!)).slice(-60)
       .map((r) => ({ at: r.sentAt!, theme: r.event.storyKey, title: r.article.title.replace(/\s+/g, " ").slice(0, 160) }));
-    const market = await marketSnapshot().catch(() => "");
+    const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : ""].filter(Boolean).join(" | ");
     const visuals = config.BRIEFING_CHARTS_ENABLED ? await briefingVisuals(kind, since) : { stats: "", images: [] };
     const input = { kind, nowWib: j.label, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
       upcoming: upcomingEvents(calendarEvents, now, 24), released: releasedEvents(calendarEvents, now, hours) };
@@ -370,6 +379,11 @@ async function briefingTick(): Promise<void> {
 }
 
 await tick();
+if (brain) {
+  await brain.regimeTick(true).catch((error) => log.warn({ err: error }, "Brain regime tick failed"));
+  setInterval(() => void (async () => { await brain.regimeTick(); await brain.markTick(); await brain.dailyTick(); })().catch((error) => log.error({ err: error }, "Brain tick failed")), 60000);
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => { try { brain.flush(); } finally { process.exit(0); } });
+}
 setInterval(() => void briefingTick().catch((error) => log.error({ err: error }, "Briefing tick failed")), 30000);
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
 if (config.ECONOMIC_CALENDAR_ENABLED) {

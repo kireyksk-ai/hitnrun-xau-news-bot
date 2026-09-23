@@ -16,10 +16,12 @@ export type PipelineDeps = {
   /** Optional: writes prose for an already-approved event that has none. */
   compose?: (article: NewsArticle, reason: string) => Promise<{ message: string; call?: import("./editor.js").GoldCall } | null>;
   /** Optional: chain of recent alerts and the bot's own track record (prompt evidence only). */
-  sequence?: (event: EventAssessment) => string;
+  sequence?: (event: EventAssessment, article: NewsArticle) => string;
   /** Optional: called once after a NEWS alert is accepted by Telegram (prediction ledger). */
   onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
+  /** Optional: independent second check right before publishing (Market Brain). */
+  critic?: (article: NewsArticle, event: EventAssessment, primary: EditorialDecision | undefined, reason: string) => Promise<import("./brain-episodes.js").CriticResult>;
   now?: () => Date;
 };
 
@@ -90,7 +92,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   try {
     const market = await deps.snapshot?.();
     const context = deps.store.marketContext(event, article, market);
-    const sequence = deps.sequence?.(event) ?? "";
+    const sequence = deps.sequence?.(event, article) ?? "";
     enriched = { ...article, summary: `${article.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}${sequence ? `\n\n${sequence}` : ""}` };
   } catch { /* Snapshot is context only and never blocks an event. */ }
   // Persist after building the context pack: the model sees the state that
@@ -145,7 +147,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // It may publish only when trusted-source Sol evidence supports it.
   const plausiblePublish = corroborated && event.candidateRoute === "PLAUSIBLE_MACRO" && aiSupports;
   const publish = deterministicPublish || plausiblePublish;
-  record = { ...record, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
+  record = { ...record, brain: { internal: primary?.internal }, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
     reason: primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
     audit: { ...auditBase, aiCalled: true, schema: "VALID", fallbackAttempted: true, outcome: publish ? "PENDING" : "INTELLIGENCE_NOT_MATERIAL" } };
   if (!corroborated) {
@@ -179,6 +181,21 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     return record;
   }
   const newsMessage = message;
+  // Independent second check. It can only block a weak/misattributed source or a
+  // stale repeat; every other objection lowers the brain's internal confidence
+  // while the news itself still goes out (news speed matters more than the call).
+  if (deps.critic) {
+    let critic: import("./brain-episodes.js").CriticResult;
+    try { critic = await deps.critic(article, event, primary, record.reason); }
+    catch { critic = { verdict: "SKIPPED", reasons: ["pemeriksa tidak tersedia"], pricedIn: false, preMoved: false, whipsawRisk: "MEDIUM", sourceIssue: false, crossMarketConflict: false }; }
+    if (critic.verdict === "BLOCK" && !critic.sourceIssue) critic = { ...critic, verdict: "DOWNGRADE", reasons: [...critic.reasons, "BLOCK diturunkan: tanpa masalah sumber"] };
+    record = { ...record, brain: { ...record.brain, critic } };
+    if (critic.verdict === "BLOCK") {
+      record = { ...record, stage: "CRITIC", primaryDecision: "REVIEW", reason: `CRITIC_BLOCK: ${critic.reasons.join("; ").slice(0, 200)}` };
+      deps.store.record(record); deps.store.markProcessedIdentity(article, event.key);
+      return record;
+    }
+  }
   // A second hard guard immediately before Telegram routing, independent of AI.
   if (deps.store.hasDeliveredIdentity(article, event.key)) {
     deps.store.increment("duplicatesRemoved");
