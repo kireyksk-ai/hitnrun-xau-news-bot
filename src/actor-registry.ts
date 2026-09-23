@@ -9,7 +9,12 @@ export const ACTOR_REGISTRY: readonly ActorRegistryEntry[] = [
   { username: "financialjuice", sourceClass: "FAST_WIRE", actor: "FinancialJuice", direct: false },
   { username: "zerohedge", sourceClass: "SECONDARY_REPORT", actor: "ZeroHedge", direct: false },
   { username: "unusual_whales", sourceClass: "SECONDARY_REPORT", actor: "Unusual Whales", direct: false },
-  { username: "WatcherGuru", sourceClass: "SECONDARY_REPORT", actor: "WatcherGuru", direct: false }
+  { username: "WatcherGuru", sourceClass: "SECONDARY_REPORT", actor: "WatcherGuru", direct: false },
+  // Bloomberg's official newsroom accounts: headline + link only; Sol writes its own narrative.
+  { username: "business", sourceClass: "CREDIBLE_REPORTER", actor: "Bloomberg", direct: false },
+  { username: "markets", sourceClass: "CREDIBLE_REPORTER", actor: "Bloomberg Markets", direct: false },
+  { username: "economics", sourceClass: "CREDIBLE_REPORTER", actor: "Bloomberg Economics", direct: false },
+  { username: "BloombergTV", sourceClass: "CREDIBLE_REPORTER", actor: "Bloomberg TV", direct: false }
 ] as const;
 
 export function sourceClassFor(username?: string): SourceClass {

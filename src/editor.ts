@@ -30,6 +30,17 @@ export const SOURCE_RECOGNITION_GUIDE = `ADDITIONAL SOURCE MEMORY GUIDE (stable 
 Judge each claim and article, not a whole domain as automatically true. Federal Reserve and other responsible agencies are primary for their own decisions and releases. World Gold Council is a specialist source for gold-market research; distinguish its own estimates from underlying central-bank or exchange data. Bloomberg and CNBC may report original developments, but identify whether a particular item is new reporting, a market wrap, opinion, or a repeat. A prestigious byline never converts a recap into a new event.
 TradingEconomics price pages, Saxo market commentary, Kitco, CBS and Fortune may provide context or cross-checks. A forecast, dealer promotion, explainer or 'gold price today' page is not an event by itself. Startup Fortune is a separate publication from Fortune; do not transfer brand reputation between them. Global Energy Flow is independent analysis, not an official Hormuz authority; corroborate any tanker count or flow estimate with independent maritime, official or established reporting. FedRateCalc is a third-party calendar, not the publishing agency and not a consensus feed; confirm release times with BLS, BEA, Census or the Fed. Wikipedia is background only, never breaking-news confirmation.
 For every item, extract the new fact, event time, originating source, corroboration and difference from prior alerts. Preserve unresolved contradictions and uncertainty. Do not promote a single-source claim to confirmed, hard-code article-era prices or dates as the live regime, invent consensus, or bypass the existing source and delivery guards. Use validated, sample-backed source reputation from MARKET_CONTEXT_PACK when available; insufficient samples are not a negative verdict. This source guide is additional memory, not an instruction to send all articles from these sites.`;
+export const MATERIALITY_CALIBRATION_GUIDE = `MATERIALITY CALIBRATION (learned from real missed alerts; overrides the generic "ordinary price movement" and "repeated remarks" rejections only for these cases):
+- Core-instrument milestones are market events, not ordinary price movement: DXY at a multi-week or multi-month high/low; US 2Y/10Y/30Y yields at a multi-year high or moving about 5bp or more in a session on an identifiable catalyst; Brent/WTI crossing a round level such as $100 on a catalyst; spot gold moving about 1% or more with a named driver. Publish them with the driver and the Fed-path repricing they imply.
+- Official weekly energy data (EIA crude, gasoline, distillate, Cushing) and API inventories are data releases: a sign flip versus estimate or a miss of roughly 1M barrels or more is a surprise worth publishing.
+- A new official sanctions action by any government or central bank on Iranian or Russian entities is a policy action, not commentary.
+- A named senior official (US President, Secretary of State, Treasury Secretary; Iran's President, Foreign Minister, security chief) who adds a NEW fact is material: a reported attack on commercial ships, a new or changed negotiating condition, a named military option, a denial, or "no breakthrough" after talks. Pure rhetoric with no new fact is not.
+- Any reported attack on commercial shipping in the Gulf, Hormuz or Red Sea is an escalation even from one fast wire; label it single-source.
+- A Fed voter saying further hikes or cuts are "likely needed", or that the Fed was "out of position", adds conviction to the rate path and is material even if consistent with the last decision.
+- Treasury buyback size changes, auction results with a notable tail or strong demand, and QT or bill-purchase changes are funding-market facts.
+- OECD or IMF revisions that include an explicit Fed or ECB rate-path call are material policy forecasts.
+When a Tier 1 or Tier 2 item falls in these cases and the direction for gold is unclear, publish it with a two-way conclusion instead of rejecting it.`;
+
 export const CATALYST_REASONING_GUIDE = `ADDITIONAL CATALYST REASONING MEMORY (reasoning aids, never automatic alerts or live facts):
 For each genuinely new candidate, identify the originating action or data, event time, prior expectation, and the specific path to XAU. Consider monetary policy, inflation and labor surprises, DXY and real yields, sovereign debt and funding stress, geopolitics, central-bank reserve demand, ETF/COMEX and physical-market flows, and major trade/energy changes. A headline without the word gold can still matter; a gold-price headline can still be only a recap. Do not treat any category weight, named official's historical bias, or publication's reputation as a verdict.
 Reason in layers only as far as supplied evidence allows: actual versus consensus, prior and revisions; whether the fact changes the dominant narrative; first- and second-order channels and their counterforces; source quality and corroboration; timing and market session; DXY, real yields, oil, risk assets and XAU reaction; positioning and liquidity. Missing readings remain unknown, not estimated. Correlations, round-number levels, seasonal tendencies, FedWatch probabilities, price targets and article-era regime snapshots in examples are hypotheses or dated context, never fixed current values. The model must not calculate a precise probability, move size, accuracy or trade expected value without the required data.
@@ -79,7 +90,7 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
+      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
     });
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
@@ -94,7 +105,9 @@ export class Editor {
     if (decision.material && (!decision.judul?.trim() || !decision.ringkasan?.trim() || !decision.dampakEmas?.trim())) {
       try {
         const repaired = await this.structuredDecision(article, true, decision);
-        if (repaired.material === decision.material && repaired.confidence === decision.confidence && repaired.reason === decision.reason) decision = repaired;
+        // Repair may only add prose. The model often rewords `reason`, which used to
+        // discard a valid repair; keep the original judgment and take only the prose.
+        if (repaired.material === true) decision = { ...decision, judul: repaired.judul, ringkasan: repaired.ringkasan, dampakEmas: repaired.dampakEmas };
       } catch { /* Keep the original safe hold if prose repair fails. */ }
     }
     if (decision.material) {
@@ -108,12 +121,25 @@ export class Editor {
     return { material: false, confidence: decision.confidence, reason: decision.reason, telegramMessage: null };
   }
 
+  /**
+   * Writes the Indonesian NEWS narrative for an event the pipeline has ALREADY
+   * approved (for example when the independent shadow review scored it material
+   * while the primary pass returned no prose). It never judges materiality.
+   */
+  async compose(article: NewsArticle, reason: string): Promise<string | null> {
+    const approved = { material: true, confidence: "medium" as const, reason, judul: null, ringkasan: null, dampakEmas: null };
+    const written = await this.structuredDecision(article, true, approved);
+    const { judul, ringkasan, dampakEmas } = written;
+    if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) return null;
+    return buildTelegramMessage({ judul, ringkasan, dampakEmas });
+  }
+
   /** A separate judgment that never receives the primary classifier's answer. */
   async shadowAssess(article: NewsArticle, event: EventAssessment, prior?: StoryState): Promise<{ material: boolean; score: number; reason: string }> {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       input: [
-        { role: "developer", content: `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}` },
+        { role: "developer", content: `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` },
         { role: "user", content: JSON.stringify({ article, event, prior }) }
       ]
     });

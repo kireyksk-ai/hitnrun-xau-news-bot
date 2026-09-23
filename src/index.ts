@@ -57,11 +57,23 @@ const recentSendTimes: number[] = [];
 const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 
-function aiAllowed(): boolean {
+let budgetWarned = "";
+function aiAllowed(sourceTier = 1): boolean {
   const day = new Date().toISOString().slice(0, 10);
   if (day !== aiDay) { aiDay = day; aiCount = 0; }
-  // Budget is measured in model calls, not articles; each candidate uses two calls.
-  if (aiCount >= config.MAX_AI_ARTICLES_PER_DAY * 2) return false;
+  // Budget is measured in model calls, not articles; each candidate uses up to two calls.
+  const limit = config.MAX_AI_ARTICLES_PER_DAY * 2;
+  // Keep the last 20% of the day's budget for trusted (tier 1-2) sources only.
+  const reserved = sourceTier >= 3 && aiCount >= limit * 0.8;
+  if (aiCount >= limit || reserved) {
+    if (aiCount >= limit && budgetWarned !== day) {
+      budgetWarned = day;
+      log.error({ used: aiCount, limit }, "AI budget exhausted; new candidates cannot be judged until 00:00 UTC");
+      if (config.TELEGRAM_ADMIN_CHAT_ID) void sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID },
+        `Jatah AI harian habis (${aiCount}/${limit} panggilan). Berita baru tidak dinilai sampai 07:00 WIB. Naikkan MAX_AI_ARTICLES_PER_DAY bila perlu.`).catch(() => undefined);
+    }
+    return false;
+  }
   aiCount++; return true;
 }
 async function deliver(message: string, id: string, article: import("./types.js").NewsArticle): Promise<Record<string, number>> {
@@ -204,9 +216,10 @@ async function tick(): Promise<void> {
         for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
           const result = await processArticle(article, {
             store, snapshot: marketSnapshot,
-            analyze: (item) => aiAllowed() ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
-            shadow: (item, event) => aiAllowed() ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
-            deliver
+            analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
+            shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
+            deliver,
+            compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null)
           });
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
             importance: result.event.importance, urgency: result.event.urgency, reason: result.reason }, "Event processed");

@@ -29,7 +29,7 @@ const schema = z.object({
     TWITTER_WIRE_POLL_SECONDS: z.coerce.number().int().min(15).default(30),
     X_API_BEARER_TOKEN: z.string().optional(),
     TWITTER_WIRE_MAX_MONTHLY_USD: z.coerce.number().min(0).default(30),
-    MAX_AI_ARTICLES_PER_DAY: z.coerce.number().int().min(1).max(200).default(90),
+    MAX_AI_ARTICLES_PER_DAY: z.coerce.number().int().min(1).max(1000).default(90),
     OPENAI_MODEL: z.string().default("gpt-5.6-sol"),
     OPENAI_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
     POLL_INTERVAL_SECONDS: z.coerce.number().int().min(15).default(45),

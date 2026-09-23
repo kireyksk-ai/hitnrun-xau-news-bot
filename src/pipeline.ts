@@ -13,9 +13,32 @@ export type PipelineDeps = {
   analyze: (article: NewsArticle, event: EventAssessment) => Promise<EditorialDecision>;
   shadow: (article: NewsArticle, event: EventAssessment) => Promise<{ material: boolean; score: number; reason: string }>;
   deliver: (message: string, id: string, article: NewsArticle) => Promise<Record<string, number>>;
+  /** Optional: writes prose for an already-approved event that has none. */
+  compose?: (article: NewsArticle, reason: string) => Promise<string | null>;
   snapshot?: () => Promise<string | null>;
   now?: () => Date;
 };
+
+const echoStop = new Set(["the","a","an","of","to","in","on","and","for","is","are","be","will","with","at","by","from","that","this","it","as","us","u","s","says","said","say"]);
+function echoTokens(fact: string): Set<string> {
+  return new Set(fact.split(" ").filter((word) => word.length > 1 && !echoStop.has(word) && !/^(firstsquawk|deitaone|financialjuice|livesquawk|zerohedge)$/.test(word)));
+}
+/** Same storyline, near-identical wording, AI already consulted within 20 minutes. */
+export function crossWireEcho(event: EventAssessment, records: ReviewRecord[], now: Date): ReviewRecord | undefined {
+  const mine = echoTokens(event.fact);
+  if (mine.size < 3) return undefined;
+  return records.find((other) => {
+    if (other.id === event.key || other.event.storyKey !== event.storyKey || !other.audit?.aiCalled) return false;
+    const age = now.getTime() - Date.parse(other.event.firstSeenAt);
+    if (!(age >= 0 && age <= 20 * 60000)) return false;
+    // A held/failed judgment must not suppress a better-sourced copy.
+    if (other.event.sourceTier > event.sourceTier) return false;
+    if (/Primary AI unavailable|AI_CONTRACT_FAILURE/.test(other.reason)) return false;
+    const theirs = echoTokens(other.event.fact);
+    let shared = 0; for (const word of mine) if (theirs.has(word)) shared++;
+    return shared / Math.min(mine.size, theirs.size) >= 0.7;
+  });
+}
 
 export async function processArticle(article: NewsArticle, deps: PipelineDeps): Promise<ReviewRecord> {
   const now = deps.now?.() ?? new Date();
@@ -44,6 +67,17 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.rememberEvidence(article, event, false);
     deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.increment("lowValueRejected");
     if (event.candidateRoute === "OBVIOUS_NOISE") deps.store.increment("obviousNoiseDrop");
+    return record;
+  }
+  // Fast wires (FirstSquawk, DeItaone, financialjuice, LiveSquawk, Benzinga) often
+  // post the same headline within minutes. Judge it once; repeats would only burn
+  // the daily AI budget that later, genuinely new events need.
+  const echo = crossWireEcho(event, deps.store.records(), now);
+  if (echo) {
+    deps.store.increment("duplicatesRemoved");
+    deps.store.markProcessedIdentity(article, event.key);
+    record = { ...record, stage: "DUPLICATE", primaryDecision: "DROP", reason: `CROSS_WIRE_ECHO of ${echo.id.slice(0, 10)}` };
+    deps.store.record(record);
     return record;
   }
   if (event.candidateRoute === "PLAUSIBLE_MACRO") deps.store.increment("plausibleMacroToSol");
@@ -80,7 +114,9 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   let contractFailure = false;
   try { primary = await deps.analyze(enriched, event); }
   catch (error) { deps.store.increment("aiFailures"); contractFailure = error instanceof AIContractFailure; }
-  try { shadow = await deps.shadow(enriched, event); }
+  // The shadow review exists to catch primary misses. When the primary already
+  // approved the event, a second call adds no protection and only burns budget.
+  if (!primary?.material) try { shadow = await deps.shadow(enriched, event); }
   catch { deps.store.increment("aiFailures"); }
   if (contractFailure) {
     const reason = shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";
@@ -118,7 +154,13 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     return record;
   }
   deps.store.increment("solSend");
-  const message = primary?.material ? primary.telegramMessage : null;
+  let message = primary?.material ? primary.telegramMessage : null;
+  if (message === null && deps.compose) {
+    // Publishing was approved (primary and/or shadow), but no narrative exists.
+    // Write it now instead of silently holding a material event forever.
+    try { message = await deps.compose(article, primary?.material ? primary.reason : shadow?.reason ?? record.reason); }
+    catch { message = null; }
+  }
   if (message === null) {
     record = { ...record, stage: "FORMAT", primaryDecision: "REVIEW", reason: "FORMATTER_FAILURE: AI produced no Indonesian NEWS narrative", audit: { ...record.audit!, outcome: "FORMATTER_FAILURE" } };
     deps.store.record(record);

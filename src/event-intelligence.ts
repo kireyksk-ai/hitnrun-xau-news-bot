@@ -29,12 +29,12 @@ const macro = /\b(cpi|pce|ppi|nfp|payroll|unemployment|wage growth|jolts|retail 
 const surprise = /\b(above consensus|below consensus|surprise|sharply|revised|revision|plunges?|surges?|shock|higher than forecast|lower than forecast)\b/i;
 const rates = /\b(fed|fomc|interest rates?|rate cuts?|rate hikes?|treasury|yields?|dollar|dxy|debt|deficit|fiscal|tax policy|stimulus|balance sheet)\b/i;
 const geo = /\b(iran|israel|russia|ukraine|china|hormuz|houthi|war|ceasefire|military|missile|peace talks?)\b/i;
-const energy = /\b(oil|crude|brent|wti|tanker|shipping|opec|energy facilit|export terminal|strategic oil reserves?|oil reserves?)\b/i;
+const energy = /\b(oil|crude|brent|wti|tanker|shipping|opec|diesel|gasoline|fuel exports?|refiner(?:y|ies)|natural gas|lng|energy facilit|export terminal|strategic oil reserves?|oil reserves?)\b/i;
 const trade = /\b(tariffs?|sanctions?|trade agreement|trade policy|export controls?)\b/i;
 // Ordinary company news can contain words such as oil, China, or AI without
 // becoming a macro event. Keep that high-volume firehose out of Sol.
 const obviousCorporateNoise = /\b(cnbc final trades?|final trades?|stock movers?|share(?:s)? (?:rise|fall|jump|drop)|analyst (?:upgrade|downgrade|rating|target)|price target|whale (?:alert|activity|wallet)|(?:merger|acquisition|takeover|m&a) (?:rumou?r|talks?|speculation)|fda|clinical trial|drug approval|biotech|earnings|quarterly results?|revenue|product launch|company ai|artificial intelligence growth|data center sales|chip sales|insider (?:buying|selling)|crypto(?:currency)?|bitcoin|memecoin|nft|entertainment|celebrity|sports|campaign rally|local candidate|late-night|photograph|media (?:coverage|access|seating)|television ratings?|poll numbers?)\b/i;
-const plausibleMacro = /\b(fed|fomc|federal reserve|monetary policy|financial conditions?|interest rates?|rate path|quantitative (?:tightening|easing)|balance sheet|cpi|pce|ppi|nfp|nonfarm|payroll|unemployment|wages?|jolts|jobless claims|ism|pmi|gdp|retail sales|consumer confidence|housing starts|treasury (?:auction|issuance|financing|supply|bill|note|bond|buyback|repurchase)|debt buyback|when-issued|wi|term premium|yield curve|treasury yields?|real yields?|tips|dxy|u\.s\. dollar|usd|eurusd|usdjpy|oil|crude|brent|wti|opec|oil supply|shipping|tanker|hormuz|iran|middle east|houthi|sanctions?|tariffs?|trade policy|export controls?|trump|fiscal|deficit|debt ceiling|sovereign (?:debt|default|credit|rating)|credit rating|rating downgrade|bank runs?|banking crisis|liquidity crunch|emergency liquidity|repo (?:stress|market)|sofr|treasury financing|mortgage rates?|oecd (?:inflation|growth|forecast|projection|outlook)|central bank (?:gold|reserve)|gold reserves?|reserve diversification|gold etf|gld|iau|spdr|comex|gold futures margin|gold delivery|gold inventories|gold positioning|physical gold|gold demand|gold supply|gold import (?:duty|tariff|policy)|india gold imports?|ecb|boe|boj|pboc|rbi)\b/i;
+const plausibleMacro = /\b(fed|fomc|federal reserve|monetary policy|financial conditions?|interest rates?|rate path|quantitative (?:tightening|easing)|balance sheet|cpi|pce|ppi|nfp|nonfarm|payroll|unemployment|wages?|jolts|jobless claims|ism|pmi|gdp|retail sales|consumer confidence|housing starts|treasury (?:auction|issuance|financing|supply|bill|note|bond|buyback|repurchase)|debt buyback|when-issued|wi|term premium|yield curve|treasury yields?|real yields?|tips|dxy|u\.s\. dollar|usd|eurusd|usdjpy|oil|crude|brent|wti|opec|oil supply|shipping|tanker|hormuz|iran|middle east|houthi|sanctions?|tariffs?|trade policy|export controls?|trump|fiscal|deficit|debt ceiling|sovereign (?:debt|default|credit|rating)|credit rating|rating downgrade|bank runs?|banking crisis|liquidity crunch|emergency liquidity|repo (?:stress|market)|sofr|treasury financing|mortgage rates?|oecd (?:inflation|growth|forecast|projection|outlook)|central bank (?:gold|reserve)|gold reserves?|reserve diversification|gold etf|gld|iau|spdr|comex|gold futures margin|gold delivery|gold inventories|gold positioning|physical gold|gold demand|gold supply|gold import (?:duty|tariff|policy)|india gold imports?|ecb|boe|boj|pboc|rbi|oecd|imf|buy ?backs?|dollar|euro[- ]?zone|business activity|private[- ]sector activity|diesel|gasoline|natural gas|lng|refiner(?:y|ies)|crude inventor(?:y|ies)|eia)s?\b/i;
 
 function isObviousNoise(text: string): boolean {
   return obviousCorporateNoise.test(text) || minorOrCommentary.test(text) || mediaOrPersonal.test(text);
@@ -58,11 +58,11 @@ const easingStance = /\b(rate cuts?|eas(?:e|ing)|disinflation|inflation progress
 export function sourceTier(article: NewsArticle): SourceTier {
   // X supplies a generic sourceName; its verified actor classification carries
   // the wire identity that the source-name check below cannot see.
-  if (article.provider === "twitter-wire" && article.sourceMeta?.sourceClass === "FAST_WIRE" &&
+  if (article.provider === "twitter-wire" && (article.sourceMeta?.sourceClass === "FAST_WIRE" || article.sourceMeta?.sourceClass === "CREDIBLE_REPORTER") &&
     /^https:\/\/x\.com\/[A-Za-z0-9_]+\/status\/\d+/i.test(article.url)) return 2;
   const source = `${article.sourceName ?? ""} ${article.provider}`.toLowerCase();
   if (/federal reserve|treasury|white house|bureau of labor|bea|eia|central bank|government|truth social/.test(source)) return 1;
-  if (/reuters|bloomberg|associated press|financial times|benzinga|firstsquawk|livesquawk|deltaone/.test(source)) return 2;
+  if (/reuters|bloomberg|associated press|financial times|benzinga|firstsquawk|livesquawk|deltaone|wall street journal|\bwsj\b|cnbc|marketwatch|barron'?s|nikkei|s&p global/.test(source)) return 2;
   return 3;
 }
 export function classifyChange(text: string): ChangeType {
@@ -105,7 +105,9 @@ export function assessEvent(article: NewsArticle, prior?: StoryState, seenAt = n
   const marketRelevance = relevant.test(text) ? 80 : 10;
   const sourceConfidence = tier === 1 ? 95 : tier === 2 ? 80 : 45;
   const channel = causalChannel(text);
-  const candidateRoute: CandidateRoute = isObviousNoise(text) ? "OBVIOUS_NOISE" : channel ? "DETERMINISTIC_MATERIAL" : plausibleMacro.test(text) ? "PLAUSIBLE_MACRO" : "OBVIOUS_NOISE";
+  // Noise words are checked on the headline only: long wire bodies often say
+  // "reiterated"/"repeated" or mention earnings while the headline is a real macro fact.
+  const candidateRoute: CandidateRoute = isObviousNoise(article.title) ? "OBVIOUS_NOISE" : channel ? "DETERMINISTIC_MATERIAL" : plausibleMacro.test(text) ? "PLAUSIBLE_MACRO" : "OBVIOUS_NOISE";
   const actorImportance = authority.test(text) ? 90 : 40;
   const marketMateriality = channel ? 85 : 0;
   const magnitude = channel ? (/\b(major|surprise|sharply|shutdown|strike|attack|ceasefire|sanctions?|tariffs?)\b/i.test(text) ? 90 : 75) : 0;
