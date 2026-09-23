@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Editor, NEWS_RECOGNITION_GUIDE, SOURCE_RECOGNITION_GUIDE } from "../dist/editor.js";
+import { Editor, NEWS_RECOGNITION_GUIDE, SOURCE_RECOGNITION_GUIDE, CATALYST_REASONING_GUIDE } from "../dist/editor.js";
 import { assessEvent } from "../dist/event-intelligence.js";
 
 const article = {
@@ -16,6 +16,8 @@ test("additive news recognition reaches both Sol judgments without changing outp
   assert.match(NEWS_RECOGNITION_GUIDE, /never invent missing values/);
   assert.match(SOURCE_RECOGNITION_GUIDE, /Startup Fortune is a separate publication from Fortune/);
   assert.match(SOURCE_RECOGNITION_GUIDE, /FedRateCalc is a third-party calendar/);
+  assert.match(CATALYST_REASONING_GUIDE, /Distinguish a pre-reaction forecast from a post-reaction explanation/);
+  assert.match(CATALYST_REASONING_GUIDE, /never fixed current values/);
   const editor = new Editor("gpt-5.6-sol", "medium", "test-key");
   const calls = [];
   editor.client = { responses: { create: async (request) => {
@@ -32,8 +34,10 @@ test("additive news recognition reaches both Sol judgments without changing outp
   assert.equal(calls[0].text.format.type, "json_schema");
   assert.match(calls[0].input[0].content, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
   assert.match(calls[0].input[0].content, /ADDITIONAL SOURCE MEMORY GUIDE/);
+  assert.match(calls[0].input[0].content, /ADDITIONAL CATALYST REASONING MEMORY/);
   assert.match(calls[0].input[0].content, /When material=true, write ONLY three clean fields/);
   assert.match(calls[1].input[0].content, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
   assert.match(calls[1].input[0].content, /ADDITIONAL SOURCE MEMORY GUIDE/);
+  assert.match(calls[1].input[0].content, /ADDITIONAL CATALYST REASONING MEMORY/);
   assert.match(calls[1].input[0].content, /Return JSON only: \{material:boolean, score:integer 0-100, reason:string\}/);
 });

@@ -21,7 +21,12 @@ const plausible = [
   "Central bank announces purchase of gold reserves as part of reserve diversification.",
   "Gold ETF reports material net inflow into GLD holdings.",
   "DXY rises as Treasury yields reprice after macro data.",
-  "Fed official gives guidance on financial conditions and the rate path."
+  "Fed official gives guidance on financial conditions and the rate path.",
+  "US PPI and JOLTS data surprise economists as wage pressure persists.",
+  "Major bank run triggers emergency liquidity support across the financial system.",
+  "US sovereign credit rating downgraded amid Treasury funding stress.",
+  "India lowers gold import duty as physical demand surges.",
+  "CME raises COMEX gold futures margin after delivery stress."
 ];
 
 test("verified X fast wires retain trusted-source routing, unknown accounts do not", async () => {
@@ -47,7 +52,7 @@ test("macro candidates reach Sol even when no narrow causal channel exists", () 
     assert.notEqual(event.candidateRoute, "OBVIOUS_NOISE", title);
     assert.equal(shouldReview(event), true, title);
   }
-  for (const title of plausible.slice(0, 5)) {
+  for (const title of [...plausible.slice(0, 5), ...plausible.slice(7)]) {
     const event = assessEvent(article(title));
     assert.equal(event.candidateRoute, "PLAUSIBLE_MACRO", title);
     assert.equal(event.causalChannel, null, title);
