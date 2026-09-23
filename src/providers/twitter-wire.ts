@@ -3,11 +3,10 @@ import { runtimeActorRegistry, sourceClassFor } from "../actor-registry.js";
 
 const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "unusual_whales", "financialjuice", "WatcherGuru"];
 
-function queryFor(accounts: readonly string[]): string { return [
+export function queryFor(accounts: readonly string[]): string { return [
         `(${accounts.map((handle) => `from:${handle}`).join(" OR ")})`,
-        `(Fed OR Powell OR Warsh OR Waller OR Bowman OR Cook OR Jefferson OR Williams OR Daly OR Bostic`,
-        `OR Goolsbee OR Logan OR Musalem OR Schmid OR Collins OR Hammack OR Kashkari`,
-        `OR CPI OR NFP OR PCE OR PPI OR FOMC OR Treasury OR Bessent OR tariff OR gold OR XAU`,
+        `(Fed OR Powell OR Warsh OR FOMC`,
+        `OR CPI OR NFP OR PCE OR PPI OR Treasury OR Bessent OR tariff OR gold OR XAU`,
         `OR PMI OR OECD OR mortgage OR ECB OR eurozone OR GDP OR DXY OR dollar`,
         `OR China OR Taiwan OR war OR Iran OR Israel OR Russia OR oil OR OPEC OR sanctions OR Houthi OR missile OR strike)`].join(" " ); }
 
