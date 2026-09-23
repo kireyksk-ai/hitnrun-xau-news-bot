@@ -193,4 +193,16 @@ export class Editor {
     const raw = response.output_text.replace(/^```json\s*|\s*```$/g, "");
     return z.object({ material: z.boolean(), score: z.number().int().min(0).max(100), reason: z.string() }).parse(JSON.parse(raw));
   }
+
+  /** Scheduled desk briefing (morning / 21:00 WIB). Plain Telegram HTML text, validated by the caller. */
+  async briefing(prompt: string): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
+      input: [
+        { role: "developer", content: `Lo analis desk emas yang lagi kasih briefing open market ke member grup Telegram. Ini bukan alert berita: rangkum, sambungkan sebab-akibat, dan kasih panduan apa yang perlu dipantau. Hanya potensi arah dan skenario, tidak pernah zona, level harga, entry, target, stop-loss atau perintah beli/jual. Hanya fakta yang diberikan; jangan mengarang angka, konsensus, atau kejadian.\n\n${HITNRUN_VOICE_GUIDE}` },
+        { role: "user", content: prompt }
+      ]
+    });
+    return response.output_text.trim();
+  }
 }

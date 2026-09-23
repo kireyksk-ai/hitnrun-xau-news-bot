@@ -22,7 +22,9 @@ import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
 import { formatDailyLearningReview } from "./daily-learning-review.js";
 import { sequenceContext } from "./sequence-context.js";
-import { ShadowOutcomeLedger, dueShadowMarks, formatMissedReport, markShadow } from "./shadow-outcomes.js";
+import { ShadowOutcomeLedger, dueShadowMarks, formatMissedReport, markShadow, rejectedButMoved } from "./shadow-outcomes.js";
+import { briefingVisuals, sendTelegramAlbum } from "./briefing-charts.js";
+import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
 import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
 
@@ -62,6 +64,9 @@ let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicki
 const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
 const shadowOutcomes = new ShadowOutcomeLedger(`${config.SQLITE_PATH}.shadow-outcomes.json`);
+const briefingEditor = new Editor(config.BRIEFING_MODEL ?? config.OPENAI_MODEL, config.BRIEFING_REASONING_EFFORT, config.OPENAI_API_KEY);
+const briefings = new BriefingLedger(`${config.SQLITE_PATH}.briefings.json`);
+let briefingBusy = false; const briefingFailures = new Map<string, number>();
 let priceCache: { at: number; price?: number } = { at: 0 };
 async function cachedXauPrice(): Promise<number | undefined> {
   if (Date.now() - priceCache.at < 60_000) return priceCache.price;
@@ -324,7 +329,48 @@ async function tick(): Promise<void> {
     }
   } finally { ticking = false; }
 }
+/** Morning / 21:00 WIB desk briefing: recap + what to watch. One AI call each, outside the per-article budget. */
+async function briefingTick(): Promise<void> {
+  if (!config.BRIEFING_ENABLED || briefingBusy) return;
+  const now = new Date();
+  const kind: BriefingKind | null = dueBriefing(now, config.BRIEFING_MORNING_WIB, config.BRIEFING_EVENING_WIB, briefings.sent());
+  if (!kind) return;
+  briefingBusy = true;
+  const j = jakarta(now);
+  try {
+    // Recap = everything shared in the last 24 hours (Monday morning: since Friday's session, the weekend is closed).
+    const hours = kind === "PAGI" && j.weekday === 1 ? 62 : 24;
+    const since = now.getTime() - hours * 3600_000;
+    const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since)
+      .sort((a, b) => a.sentAt!.localeCompare(b.sentAt!)).slice(-60)
+      .map((r) => ({ at: r.sentAt!, theme: r.event.storyKey, title: r.article.title.replace(/\s+/g, " ").slice(0, 160) }));
+    const market = await marketSnapshot().catch(() => "");
+    const visuals = config.BRIEFING_CHARTS_ENABLED ? await briefingVisuals(kind, since) : { stats: "", images: [] };
+    const input = { kind, nowWib: j.label, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
+      upcoming: upcomingEvents(calendarEvents, now, 24), released: releasedEvents(calendarEvents, now, hours) };
+    let checked: ReturnType<typeof validateBriefing> = { ok: false, reason: "not generated" };
+    for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input)));
+    // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.
+    briefings.mark(kind, j.day);
+    if (!checked.ok) { log.warn({ kind, reason: checked.reason }, "Briefing rejected by validator"); return; }
+    // Images first (stats), then the analysis. An album failure never blocks the text.
+    if (visuals.images.length) for (const destination of destinations) {
+      try { await sendTelegramAlbum(config.TELEGRAM_BOT_TOKEN, destination, visuals.images); }
+      catch (error) { log.warn({ err: error, chatId: destination.chatId }, "Briefing charts not delivered"); }
+    }
+    const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, checked.text, store);
+    log.info({ kind, images: visuals.images.length, accepted: Object.keys(accepted).length, failures: failures.length, alerts: sentAlerts.length, upcoming: input.upcoming.length }, "Briefing sent");
+  } catch (error) {
+    log.error({ err: error, kind }, "Briefing failed");
+    // Up to 3 attempts inside the window, then give up for the day instead of hammering the API.
+    const key = `${kind}:${j.day}`; briefingFailures.set(key, (briefingFailures.get(key) ?? 0) + 1);
+    if ((briefingFailures.get(key) ?? 0) >= 3) briefings.mark(kind, j.day);
+  }
+  finally { briefingBusy = false; }
+}
+
 await tick();
+setInterval(() => void briefingTick().catch((error) => log.error({ err: error }, "Briefing tick failed")), 30000);
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
 if (config.ECONOMIC_CALENDAR_ENABLED) {
   await calendarTick();

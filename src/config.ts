@@ -21,6 +21,14 @@ const schema = z.object({
         FXMACRODATA_POLL_SECONDS: z.coerce.number().int().min(60).default(300),
     // Weekly accuracy report card to the news group (Sunday 19:00 WIB). Off until enough calls exist.
     PUBLIC_SCORECARD_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+    // Scheduled desk briefings to the news groups (WIB). Morning Mon-Sat, evening Mon-Fri.
+    BRIEFING_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+    BRIEFING_MORNING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
+    BRIEFING_EVENING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("21:00"),
+    // Dedicated Sol for briefings (defaults to OPENAI_MODEL) with deeper reasoning; statistic images on by default.
+    BRIEFING_MODEL: z.string().optional(),
+    BRIEFING_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
+    BRIEFING_CHARTS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     ECONOMIC_CALENDAR_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
     OFFICIAL_MACRO_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
