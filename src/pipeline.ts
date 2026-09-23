@@ -15,6 +15,8 @@ export type PipelineDeps = {
   deliver: (message: string, id: string, article: NewsArticle) => Promise<Record<string, number>>;
   /** Optional: writes prose for an already-approved event that has none. */
   compose?: (article: NewsArticle, reason: string) => Promise<{ message: string; call?: import("./editor.js").GoldCall } | null>;
+  /** Optional: chain of recent alerts and the bot's own track record (prompt evidence only). */
+  sequence?: (event: EventAssessment) => string;
   /** Optional: called once after a NEWS alert is accepted by Telegram (prediction ledger). */
   onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
@@ -88,7 +90,8 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   try {
     const market = await deps.snapshot?.();
     const context = deps.store.marketContext(event, article, market);
-    enriched = { ...article, summary: `${article.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}` };
+    const sequence = deps.sequence?.(event) ?? "";
+    enriched = { ...article, summary: `${article.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}${sequence ? `\n\n${sequence}` : ""}` };
   } catch { /* Snapshot is context only and never blocks an event. */ }
   // Persist after building the context pack: the model sees the state that
   // existed immediately before this candidate, not a state overwritten by it.

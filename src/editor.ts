@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { EditorialDecision, NewsArticle } from "./types.js";
 import type { EventAssessment, StoryState } from "./event-intelligence.js";
+import { SEQUENCE_REASONING_GUIDE } from "./sequence-context.js";
+import { REJECTED_OUTCOME_GUIDE } from "./shadow-outcomes.js";
 
 // The AI occasionally returns a valid-but-incomplete JSON object. Treat that
 // as a safe rejection instead of throwing, otherwise the same article is
@@ -118,7 +120,7 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
+      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
     });
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
@@ -170,7 +172,7 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       input: [
-        { role: "developer", content: `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` },
+        { role: "developer", content: `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}` },
         { role: "user", content: JSON.stringify({ article, event, prior }) }
       ]
     });

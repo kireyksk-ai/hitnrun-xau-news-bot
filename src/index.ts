@@ -21,6 +21,8 @@ import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
 import { formatDailyLearningReview } from "./daily-learning-review.js";
+import { sequenceContext } from "./sequence-context.js";
+import { ShadowOutcomeLedger, dueShadowMarks, formatMissedReport, markShadow } from "./shadow-outcomes.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
 import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
 
@@ -59,6 +61,22 @@ const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
+const shadowOutcomes = new ShadowOutcomeLedger(`${config.SQLITE_PATH}.shadow-outcomes.json`);
+let priceCache: { at: number; price?: number } = { at: 0 };
+async function cachedXauPrice(): Promise<number | undefined> {
+  if (Date.now() - priceCache.at < 60_000) return priceCache.price;
+  priceCache = { at: Date.now(), price: await xauPrice() };
+  return priceCache.price;
+}
+/** Remember judged-but-rejected (and sent) candidates with the XAU price, to learn from later moves. */
+async function rememberOutcome(result: import("./intelligence-store.js").ReviewRecord): Promise<void> {
+  const judged = result.stage === "AI" || result.stage === "SHADOW" || result.stage === "SENT" || result.stage === "FORMAT" || result.stage === "SOURCE";
+  const trustedNoise = result.stage === "SCORE" && result.event.sourceTier <= 2;
+  if (!judged && !trustedNoise) return;
+  shadowOutcomes.add({ id: result.id, at: new Date().toISOString(), title: result.article.title.slice(0, 200), storyKey: result.event.storyKey,
+    source: result.article.provider, stage: result.stage, reason: result.reason.slice(0, 80), fact: result.event.fact.slice(0, 240),
+    entryPrice: await cachedXauPrice(), marks: {} });
+}
 
 /** XAU reference price for scoring (COMEX gold futures via Yahoo; returns are what matter). */
 async function xauPrice(): Promise<number | undefined> {
@@ -86,10 +104,15 @@ async function recordPrediction(record: import("./intelligence-store.js").Review
 async function scorePredictions(): Promise<void> {
   if (Date.now() - lastScoringAt < 60_000) return;
   lastScoringAt = Date.now();
-  const now = new Date(), due = predictions.pending(now);
-  if (!due.length) return;
-  const price = await xauPrice();
+  const now = new Date(), due = predictions.pending(now), shadowDue = shadowOutcomes.pending(now);
+  if (!due.length && !shadowDue.length) return;
+  const price = await cachedXauPrice();
   if (price === undefined) return;
+  for (const item of shadowDue) {
+    let next = item;
+    for (const minutes of dueShadowMarks(item, now)) next = markShadow(next, minutes, price, now);
+    shadowOutcomes.update(next);
+  }
   for (const item of due) {
     let next = item;
     for (const minutes of dueMarks(item, now)) next = applyMark(next, minutes, price, now);
@@ -209,7 +232,7 @@ async function adminReport(): Promise<void> {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const misses = store.records().filter((r) => r.adminDecision === "FALSE_NEGATIVE" || r.stage === "SHADOW" && r.primaryDecision !== "SEND").slice(-10);
   const appendix = misses.length ? `\nHigh-risk miss refs: ${misses.map((r) => r.id.slice(0, 10)).join(", ")}` : "";
-  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir")}\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
+  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir")}\n\n${formatMissedReport(shadowOutcomes.all(), new Date())}\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
   store.setLastReportDay(day);
 }
 async function pollAdmin(): Promise<void> {
@@ -226,6 +249,7 @@ async function pollAdmin(): Promise<void> {
       else if (input === "/safe off") { store.setSafeMode(false); await reply("Safe mode OFF. Gunakan /replay untuk antrean."); }
       else if (input === "/learning") await reply(formatLearningStatus(store));
       else if (input === "/learned") await reply(formatDailyLearningReview(store));
+      else if (input === "/missed") await reply(formatMissedReport(shadowOutcomes.all(), new Date()));
       else if (input === "/rapor") await reply(formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir"));
       else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
@@ -276,8 +300,12 @@ async function tick(): Promise<void> {
             shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
             deliver,
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
-            onSent: recordPrediction
+            onSent: recordPrediction,
+            sequence: (event) => sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
+              .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
+              { shadow: shadowOutcomes.all(), fact: event.fact })
           });
+          try { await rememberOutcome(result); } catch (error) { log.warn({ err: error }, "Outcome memory failed"); }
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
             importance: result.event.importance, urgency: result.event.urgency, reason: result.reason }, "Event processed");
         }

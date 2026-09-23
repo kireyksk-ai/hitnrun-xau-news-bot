@@ -77,11 +77,24 @@ export function classifyChange(text: string): ChangeType {
 function normalize(text: string): string { return text.toLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
 function storyKeyFor(text: string): string {
   const t = text.toLowerCase();
-  if (/iran|hormuz|israel|saudi|houthi/.test(t)) return "iran-gulf-conflict";
+  // Finer threads so a sequence (e.g. talks -> Hormuz condition -> ship attack)
+  // is not flattened into one Iran bucket. All keep the "iran-gulf-conflict"
+  // prefix that the store's evidence filters rely on.
+  if (/iran|hormuz|israel|saudi|houthi/.test(t)) {
+    if (/hormuz|strait|tanker|shipping|vessel|commercial ships?/.test(t)) return "iran-gulf-conflict-hormuz";
+    if (/houthi|red sea|yemen/.test(t)) return "iran-gulf-conflict-houthi";
+    if (/nuclear|enrich|iaea/.test(t)) return "iran-gulf-conflict-nuclear";
+    if (/talks?|negotiat|mediat|meeting|deal|ceasefire|araghchi|witkoff|kushner|qatar|oman|diplomac/.test(t)) return "iran-gulf-conflict-diplomacy";
+    if (/strike|attack|missile|military|irgc|annihilate|war\b/.test(t)) return "iran-gulf-conflict-military";
+    if (/saudi|aramco|pipeline/.test(t)) return "iran-gulf-conflict-saudi";
+    return "iran-gulf-conflict";
+  }
   const release = t.match(/\b(cpi|pce|nfp|payroll|gdp|ism|pmi|retail sales|jobless claims)\b/);
   if (release) return `us-macro-${release[1].replaceAll(" ", "-")}`;
-  if (/fed|fomc|powell|goolsbee|waller|warsh|rate/.test(t)) return "fed-policy";
-  if (/oil|crude|brent|wti|opec|tanker/.test(t)) return "oil-supply";
+  if (/\b(fed|fomc|powell|goolsbee|waller|warsh|barr|barkin|bostic|daly|logan|kashkari|hammack|musalem|schmid|jefferson|bowman|federal reserve)\b|interest rates?|rate (?:hike|cut|path)/.test(t)) return "fed-policy";
+  if (/\b(treasury yields?|yields?|bonds?|treasur(?:y|ies) (?:auction|buyback)|10-year|30-year|two-year|2-year|5-year)\b/.test(t)) return "treasury-yields";
+  if (/\b(dollar|dxy|usd)\b/.test(t)) return "fx-usd";
+  if (/oil|crude|brent|wti|opec|tanker|diesel|gasoline/.test(t)) return "oil-supply";
   if (/tariff|sanction|trade/.test(t)) return "trade-sanctions";
   return `other-${createHash("sha256").update(normalize(text).slice(0, 80)).digest("hex").slice(0, 12)}`;
 }
