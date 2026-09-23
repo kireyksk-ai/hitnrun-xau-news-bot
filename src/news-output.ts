@@ -35,10 +35,12 @@ export function validateNewsOutput(message: string, article: NewsArticle): Outpu
   }
   if (/https?:\/\/|www\.|\b(?:Reuters|Bloomberg|Politico|Truth Social)\s*[:—-]/i.test(visible)) return { ok: false, reason: "Raw source attribution or link in NEWS" };
   if (copiesSource(message, article)) return { ok: false, reason: "NEWS copies source text" };
-  const idWords = visible.match(/\b(apa|baru|terjadi|trump|mengatakan|terbuka|bertemu|pertemuan|dengan|ini|karena|jalur|diplomasi|buat|emas|risiko|perang|bisa|kalau|hanya|tanpa|belum|jelas|dampak|pasar|suku|bunga|harga|naik|turun|tekanan|menjadi|akan|sementara|tetap|sehingga|terhadap|dari|pada|yang|dan|di|ke|untuk|sebagai|masih|lebih|dapat|sedang|setelah|sebelum|jika|namun|tetapi)\b/gi) ?? [];
-  const enWords = visible.match(/\b(the|and|said|says|will|would|could|has|have|after|before|against|between|according|announced|announces|meeting|president|government|market|shipping|threat|attack|policy)\b/gi) ?? [];
+  const idWords = visible.match(/\b(gw|lo|kita|gak|gk|klo|udah|belom|blm|yg|tp|jg|lg|bs|abis|bakal|doang|malah|makanya|intinya|kayak|emang|jadi|apa|baru|terjadi|trump|mengatakan|terbuka|bertemu|pertemuan|dengan|ini|karena|jalur|diplomasi|buat|emas|risiko|perang|bisa|kalau|hanya|tanpa|belum|jelas|dampak|pasar|suku|bunga|harga|naik|turun|tekanan|menjadi|akan|sementara|tetap|sehingga|terhadap|dari|pada|yang|dan|di|ke|untuk|sebagai|masih|lebih|dapat|sedang|setelah|sebelum|jika|namun|tetapi)\b/gi) ?? [];
+  // Trader words the owner really uses (market, buyer, yield, safe haven...) are not
+  // counted as English; the check only catches pasted English sentences.
+  const enWords = visible.match(/\b(the|and|said|says|will|would|could|has|have|after|before|against|between|according|announced|announces|meeting|president|government|shipping|threat|attack|policy)\b/gi) ?? [];
   if (idWords.length < 8 || idWords.length <= enWords.length * 2) return { ok: false, reason: "NEWS is not predominantly Indonesian" };
-  if (!/\b(emas|xau)\b/i.test(blocks[2])) return { ok: false, reason: "Gold impact paragraph missing" };
+  if (!/\b(emas|xau|gold)\b/i.test(blocks[2])) return { ok: false, reason: "Gold impact paragraph missing" };
   return { ok: true };
 }
 
