@@ -14,7 +14,9 @@ export type PipelineDeps = {
   shadow: (article: NewsArticle, event: EventAssessment) => Promise<{ material: boolean; score: number; reason: string }>;
   deliver: (message: string, id: string, article: NewsArticle) => Promise<Record<string, number>>;
   /** Optional: writes prose for an already-approved event that has none. */
-  compose?: (article: NewsArticle, reason: string) => Promise<string | null>;
+  compose?: (article: NewsArticle, reason: string) => Promise<{ message: string; call?: import("./editor.js").GoldCall } | null>;
+  /** Optional: called once after a NEWS alert is accepted by Telegram (prediction ledger). */
+  onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
   now?: () => Date;
 };
@@ -155,10 +157,11 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   }
   deps.store.increment("solSend");
   let message = primary?.material ? primary.telegramMessage : null;
+  let call = primary?.material ? primary.call : undefined;
   if (message === null && deps.compose) {
     // Publishing was approved (primary and/or shadow), but no narrative exists.
     // Write it now instead of silently holding a material event forever.
-    try { message = await deps.compose(article, primary?.material ? primary.reason : shadow?.reason ?? record.reason); }
+    try { const composed = await deps.compose(article, primary?.material ? primary.reason : shadow?.reason ?? record.reason); message = composed?.message ?? null; call = composed?.call ?? call; }
     catch { message = null; }
   }
   if (message === null) {
@@ -197,6 +200,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
       deps.store.rememberEvidence(article, event, true);
       deps.store.increment("alertsSent");
       deps.store.deliveryLatency(Math.max(0, (deps.now?.() ?? new Date()).getTime() - now.getTime()));
+      try { await deps.onSent?.(record, call); } catch { /* The ledger is measurement only; it never blocks delivery. */ }
     }
     return record;
   } catch {

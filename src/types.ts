@@ -26,5 +26,7 @@ export type EditorialDecision = {
   confidence: "high" | "medium" | "low";
   reason: string;
   telegramMessage: string | null;
+  /** Potential gold direction attached to the NEWS text; measured later, never a trade instruction. */
+  call?: import("./editor.js").GoldCall;
 };
 

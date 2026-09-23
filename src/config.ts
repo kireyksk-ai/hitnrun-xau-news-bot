@@ -19,6 +19,8 @@ const schema = z.object({
         BENZINGA_POLL_SECONDS: z.coerce.number().int().min(15).default(30),
         FXMACRODATA_API_KEY: z.string().optional(),
         FXMACRODATA_POLL_SECONDS: z.coerce.number().int().min(60).default(300),
+    // Weekly accuracy report card to the news group (Sunday 19:00 WIB). Off until enough calls exist.
+    PUBLIC_SCORECARD_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
     ECONOMIC_CALENDAR_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
     OFFICIAL_MACRO_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),

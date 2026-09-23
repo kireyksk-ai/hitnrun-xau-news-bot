@@ -8,15 +8,23 @@ import type { EventAssessment, StoryState } from "./event-intelligence.js";
 // repeatedly retried and wastes both AI calls and provider quota.
 const decisionSchema = z.object({
   material: z.boolean(), confidence: z.enum(["high", "medium", "low"]), reason: z.string(),
-  judul: z.string().nullable(), ringkasan: z.string().nullable(), dampakEmas: z.string().nullable()
+  judul: z.string().nullable(), ringkasan: z.string().nullable(), dampakEmas: z.string().nullable(),
+  // Optional for backward compatibility with older structured responses.
+  // Lenient on purpose: an odd value is normalised by goldCallFrom() instead of
+  // failing the whole decision (which would hold a material alert).
+  potensiArah: z.string().nullable().optional(),
+  keyakinan: z.number().nullable().optional(),
+  horizonJam: z.number().nullable().optional()
 }).strict();
 const decisionJsonSchema = {
   type: "object", additionalProperties: false,
   properties: {
     material: { type: "boolean" }, confidence: { type: "string", enum: ["high", "medium", "low"] },
     reason: { type: "string" }, judul: { type: ["string", "null"] },
-    ringkasan: { type: ["string", "null"] }, dampakEmas: { type: ["string", "null"] }
-  }, required: ["material", "confidence", "reason", "judul", "ringkasan", "dampakEmas"]
+    ringkasan: { type: ["string", "null"] }, dampakEmas: { type: ["string", "null"] },
+    potensiArah: { type: ["string", "null"], description: "BULLISH, BEARISH, TWO_WAY or UNCLEAR" },
+    keyakinan: { type: ["integer", "null"], description: "50-90" }, horizonJam: { type: ["integer", "null"], description: "1, 4 or 24" }
+  }, required: ["material", "confidence", "reason", "judul", "ringkasan", "dampakEmas", "potensiArah", "keyakinan", "horizonJam"]
 };
 export class AIContractFailure extends Error { constructor(message = "AI structured response invalid after repair retry") { super(message); this.name = "AIContractFailure"; } }
 // Additive recognition examples from the owner's XAU classifier. They inform
@@ -60,7 +68,8 @@ When material=true, write ONLY three clean fields in natural Indonesian; source 
 - ringkasan: what NEW fact happened and what changed, paraphrased in Indonesian, around 30-70 words
 - dampakEmas: concrete causal path to gold, including counterforce/uncertainty where appropriate, around 35-90 words. If direction is unclear, say "arah emas belum jelas". Do not force a 1-4 hour prediction.
 The final NEWS post will be ⚠️ JUDUL, then ringkasan, then dampakEmas. Target 80-180 words total. Never include importance/urgency, classifier labels, debug data, source names, URLs, or raw English in these fields. If unable to produce safe Indonesian prose, return material=true with any missing field null; it will be held for admin review, never replaced with raw source text.
-When material=false, leave judul, ringkasan and dampakEmas null.
+POTENTIAL DIRECTION (measured later against XAU; this builds the public track record): when material=true also set potensiArah, keyakinan and horizonJam. potensiArah=BULLISH or BEARISH only when the causal chain AND the supplied live readings point the same way; use TWO_WAY when strong forces conflict and UNCLEAR when evidence is thin. keyakinan is an honest 50-90 probability that gold moves that way by the horizon (never above 90; 55-65 is normal for news). horizonJam is 1, 4 or 24: the window in which the effect should show. This is a potential, never a trading instruction: never write entries, zones, levels, targets, stop-loss or buy/sell advice anywhere.
+When material=false, leave judul, ringkasan, dampakEmas, potensiArah, keyakinan and horizonJam null.
 Never mention that this is a bot or an automated message. Return JSON only.`;
 
 
@@ -75,11 +84,28 @@ function escapeHtml(value: string): string {
 
 type FormattableFields = { judul: string; ringkasan: string; dampakEmas: string };
 
-function buildTelegramMessage(f: FormattableFields): string {
+export type GoldCall = { direction: "BULLISH" | "BEARISH" | "TWO_WAY" | "UNCLEAR"; confidence: number; horizonMinutes: 60 | 240 | 1440 };
+export function goldCallFrom(value: { potensiArah?: string | null; keyakinan?: number | null; horizonJam?: number | null }): GoldCall | undefined {
+  const direction = value.potensiArah?.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (direction !== "BULLISH" && direction !== "BEARISH" && direction !== "TWO_WAY" && direction !== "UNCLEAR") return undefined;
+  const confidence = Math.max(50, Math.min(90, Math.round(value.keyakinan ?? 55)));
+  const horizonMinutes = value.horizonJam === 1 ? 60 : value.horizonJam === 24 ? 1440 : 240;
+  return { direction, confidence, horizonMinutes };
+}
+/** One short line of potential, never a trading instruction. */
+export function goldCallLine(call: GoldCall): string {
+  const horizon = call.horizonMinutes === 60 ? "±1 jam" : call.horizonMinutes === 1440 ? "±24 jam" : "±4 jam";
+  if (call.direction === "BULLISH") return `Potensi arah emas: cenderung naik · keyakinan ${call.confidence}% · ${horizon}`;
+  if (call.direction === "BEARISH") return `Potensi arah emas: cenderung turun · keyakinan ${call.confidence}% · ${horizon}`;
+  if (call.direction === "TWO_WAY") return `Potensi arah emas: dua arah, tunggu konfirmasi pasar`;
+  return `Potensi arah emas: belum jelas`;
+}
+
+function buildTelegramMessage(f: FormattableFields, call?: GoldCall): string {
   return [
     `<b>⚠️ ${escapeHtml(f.judul)}</b>`,
     escapeHtml(f.ringkasan),
-    escapeHtml(f.dampakEmas)
+    escapeHtml(f.dampakEmas) + (call ? `\n${goldCallLine(call)}` : "")
   ].join("\n\n");
 }
 
@@ -90,7 +116,7 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
+      input: [{ role: "developer", content: repair ? "Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text." : `${instructions}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
     });
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
@@ -107,7 +133,8 @@ export class Editor {
         const repaired = await this.structuredDecision(article, true, decision);
         // Repair may only add prose. The model often rewords `reason`, which used to
         // discard a valid repair; keep the original judgment and take only the prose.
-        if (repaired.material === true) decision = { ...decision, judul: repaired.judul, ringkasan: repaired.ringkasan, dampakEmas: repaired.dampakEmas };
+        if (repaired.material === true) decision = { ...decision, judul: repaired.judul, ringkasan: repaired.ringkasan, dampakEmas: repaired.dampakEmas,
+          potensiArah: decision.potensiArah ?? repaired.potensiArah, keyakinan: decision.keyakinan ?? repaired.keyakinan, horizonJam: decision.horizonJam ?? repaired.horizonJam };
       } catch { /* Keep the original safe hold if prose repair fails. */ }
     }
     if (decision.material) {
@@ -115,8 +142,9 @@ export class Editor {
       if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) {
         return { material: true, confidence: decision.confidence, reason: `${decision.reason}; Indonesian NEWS formatting incomplete`, telegramMessage: null };
       }
-      const telegramMessage = buildTelegramMessage({ judul, ringkasan, dampakEmas });
-      return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage };
+      const call = goldCallFrom(decision);
+      const telegramMessage = buildTelegramMessage({ judul, ringkasan, dampakEmas }, call);
+      return { material: true, confidence: decision.confidence, reason: decision.reason, telegramMessage, call };
     }
     return { material: false, confidence: decision.confidence, reason: decision.reason, telegramMessage: null };
   }
@@ -126,12 +154,13 @@ export class Editor {
    * approved (for example when the independent shadow review scored it material
    * while the primary pass returned no prose). It never judges materiality.
    */
-  async compose(article: NewsArticle, reason: string): Promise<string | null> {
-    const approved = { material: true, confidence: "medium" as const, reason, judul: null, ringkasan: null, dampakEmas: null };
+  async compose(article: NewsArticle, reason: string): Promise<{ message: string; call?: GoldCall } | null> {
+    const approved = { material: true, confidence: "medium" as const, reason, judul: null, ringkasan: null, dampakEmas: null, potensiArah: null, keyakinan: null, horizonJam: null };
     const written = await this.structuredDecision(article, true, approved);
     const { judul, ringkasan, dampakEmas } = written;
     if (!judul?.trim() || !ringkasan?.trim() || !dampakEmas?.trim()) return null;
-    return buildTelegramMessage({ judul, ringkasan, dampakEmas });
+    const call = goldCallFrom(written);
+    return { message: buildTelegramMessage({ judul, ringkasan, dampakEmas }, call), call };
   }
 
   /** A separate judgment that never receives the primary classifier's answer. */

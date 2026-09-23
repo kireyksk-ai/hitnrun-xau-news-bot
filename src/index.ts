@@ -21,6 +21,7 @@ import type { TelegramDestination } from "./telegram.js";
 import type { NewsProvider } from "./types.js";
 import { formatLearningStatus, formatSourceMemoryStatus, learningAlerts } from "./learning-observability.js";
 import { formatDailyLearningReview } from "./daily-learning-review.js";
+import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
 import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
 
 const log = pino({ level: config.LOG_LEVEL });
@@ -56,6 +57,59 @@ let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
 const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
+const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
+let lastScoringAt = 0, lastPublicScorecardWeek = "";
+
+/** XAU reference price for scoring (COMEX gold futures via Yahoo; returns are what matter). */
+async function xauPrice(): Promise<number | undefined> {
+  try {
+    const response = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?range=1d&interval=1m",
+      { headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" }, signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) return undefined;
+    const body = await response.json() as { chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }> } };
+    const meta = body.chart?.result?.[0]?.meta;
+    if (!meta?.regularMarketPrice) return undefined;
+    // A closed market must not score calls with a frozen price.
+    if (meta.regularMarketTime && Date.now() - meta.regularMarketTime * 1000 > 20 * 60_000) return undefined;
+    return meta.regularMarketPrice;
+  } catch { return undefined; }
+}
+async function recordPrediction(record: import("./intelligence-store.js").ReviewRecord, call: import("./editor.js").GoldCall | undefined): Promise<void> {
+  if (!call) return;
+  const entryPrice = await xauPrice();
+  const item: Prediction = { id: record.id, eventId: record.event.key, storyKey: record.event.storyKey, title: record.article.title.slice(0, 160),
+    createdAt: record.sentAt ?? new Date().toISOString(), direction: call.direction, confidence: call.confidence, horizonMinutes: call.horizonMinutes,
+    entryPrice, entrySource: "Yahoo GC=F", marks: {} };
+  predictions.add(item);
+  log.info({ id: record.id, direction: call.direction, confidence: call.confidence, horizonMinutes: call.horizonMinutes, entryPrice: entryPrice ?? null }, "Prediction recorded");
+}
+async function scorePredictions(): Promise<void> {
+  if (Date.now() - lastScoringAt < 60_000) return;
+  lastScoringAt = Date.now();
+  const now = new Date(), due = predictions.pending(now);
+  if (!due.length) return;
+  const price = await xauPrice();
+  if (price === undefined) return;
+  for (const item of due) {
+    let next = item;
+    for (const minutes of dueMarks(item, now)) next = applyMark(next, minutes, price, now);
+    predictions.update(next);
+  }
+  log.info({ scored: due.length, price }, "Predictions scored");
+}
+async function publicScorecard(): Promise<void> {
+  if (!config.PUBLIC_SCORECARD_ENABLED) return;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta", weekday: "short", hour: "2-digit", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (key: string) => parts.find((item) => item.type === key)?.value ?? "";
+  const week = `${part("year")}-${part("month")}-${part("day")}`;
+  if (part("weekday") !== "Sun" || Number(part("hour")) !== 19 || lastPublicScorecardWeek === week) return;
+  lastPublicScorecardWeek = week;
+  const card = scorecard(predictions.all(), Date.now() - 7 * 86400000);
+  // Never publish a report card built on a handful of calls.
+  if (card.atHorizon.hit + card.atHorizon.miss < 20) { log.info({ scored: card.atHorizon.hit + card.atHorizon.miss }, "Public scorecard skipped: sample too small"); return; }
+  const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, formatScorecard(card, "7 hari terakhir"), store);
+  log.info({ accepted: Object.keys(accepted).length }, "Public scorecard sent");
+}
 
 let budgetWarned = "";
 function aiAllowed(sourceTier = 1): boolean {
@@ -155,7 +209,7 @@ async function adminReport(): Promise<void> {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const misses = store.records().filter((r) => r.adminDecision === "FALSE_NEGATIVE" || r.stage === "SHADOW" && r.primaryDecision !== "SEND").slice(-10);
   const appendix = misses.length ? `\nHigh-risk miss refs: ${misses.map((r) => r.id.slice(0, 10)).join(", ")}` : "";
-  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
+  await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir")}\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
   store.setLastReportDay(day);
 }
 async function pollAdmin(): Promise<void> {
@@ -172,6 +226,7 @@ async function pollAdmin(): Promise<void> {
       else if (input === "/safe off") { store.setSafeMode(false); await reply("Safe mode OFF. Gunakan /replay untuk antrean."); }
       else if (input === "/learning") await reply(formatLearningStatus(store));
       else if (input === "/learned") await reply(formatDailyLearningReview(store));
+      else if (input === "/rapor") await reply(formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir"));
       else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
       else if (input.startsWith("/fn ") || input.startsWith("/fp ")) {
@@ -196,6 +251,7 @@ async function tick(): Promise<void> {
   if (ticking) return; ticking = true;
   try {
     await pollAdmin(); await adminReport();
+    try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
     if (Date.now() - lastMarketObservationAt >= config.MARKET_OBSERVER_INTERVAL_SECONDS * 1000) {
       lastMarketObservationAt = Date.now();
@@ -219,7 +275,8 @@ async function tick(): Promise<void> {
             analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
             shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
             deliver,
-            compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null)
+            compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
+            onSent: recordPrediction
           });
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
             importance: result.event.importance, urgency: result.event.urgency, reason: result.reason }, "Event processed");
