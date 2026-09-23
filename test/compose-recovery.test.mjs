@@ -23,7 +23,7 @@ test("shadow-approved event without primary prose is composed and sent instead o
   const result = await processArticle(barr, deps(
     { material: false, confidence: "medium", reason: "primary unsure", telegramMessage: null },
     { material: true, score: 90, reason: "Fed governor signals more hikes" },
-    async () => prose, sent));
+    async () => ({ message: prose }), sent));
   assert.equal(result.stage, "SENT");
   assert.equal(sent.length, 1);
 });
@@ -50,7 +50,7 @@ test("compose is not called when nothing approved publishing", async () => {
   let called = false; const sent = [];
   const result = await processArticle(barr, deps(
     { material: false, confidence: "high", reason: "repeat", telegramMessage: null },
-    { material: false, score: 20, reason: "repeat" }, async () => { called = true; return prose; }, sent));
+    { material: false, score: 20, reason: "repeat" }, async () => { called = true; return { message: prose }; }, sent));
   assert.equal(result.primaryDecision, "DROP");
   assert.equal(called, false);
 });
