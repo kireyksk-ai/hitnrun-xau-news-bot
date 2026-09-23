@@ -59,14 +59,18 @@ export class GoogleNewsRssProvider implements NewsProvider {
     googleUrl.searchParams.set("hl", "en-US");
     googleUrl.searchParams.set("gl", "US");
     googleUrl.searchParams.set("ceid", "US:en");
+    // Bloomberg-only discovery: public headlines Google has indexed from bloomberg.com.
+    const bloombergUrl = new URL(googleUrl);
+    bloombergUrl.searchParams.set("q", "site:bloomberg.com when:1h");
+    const bloomberg = await fetchXml(bloombergUrl).then((xml) => parseFeed(xml, since, this.name)).catch(() => [] as NewsArticle[]);
     try {
-      return parseFeed(await fetchXml(googleUrl), since, this.name);
+      return [...parseFeed(await fetchXml(googleUrl), since, this.name), ...bloomberg];
     } catch (googleError) {
       const results = await Promise.allSettled(fallbackFeeds.map(async (feed) => parseFeed(await fetchXml(feed.url), since, this.name, feed.source)));
       const articles = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
       if (articles.length || results.some((result) => result.status === "fulfilled")) {
         console.warn(`[google-news-rss] Google unavailable; using direct publisher RSS fallback: ${String(googleError)}`);
-        return articles;
+        return [...articles, ...bloomberg];
       }
       throw googleError;
     }

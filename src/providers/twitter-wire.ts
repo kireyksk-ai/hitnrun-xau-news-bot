@@ -1,7 +1,7 @@
 import type { NewsArticle, NewsProvider } from "../types.js";
 import { runtimeActorRegistry, sourceClassFor } from "../actor-registry.js";
 
-const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "unusual_whales", "financialjuice", "WatcherGuru"];
+const WIRE_ACCOUNTS = ["DeItaone", "FirstSquawk", "LiveSquawk", "zerohedge", "unusual_whales", "financialjuice", "WatcherGuru", "business", "markets", "economics", "BloombergTV"];
 
 export function queryFor(accounts: readonly string[]): string { return [
         `(${accounts.map((handle) => `from:${handle}`).join(" OR ")})`,
