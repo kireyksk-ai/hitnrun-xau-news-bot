@@ -101,7 +101,9 @@ export function evaluateRegime(input: RegimeInput): RegimeReading {
 
   scores.sort((a, b) => b.score - a.score);
   const primary = scores[0];
-  const supporting = scores.slice(1).filter((s) => s.score >= Math.max(30, primary.score * 0.6)).map((s) => s.regime);
+  // Opposite ends of one axis cannot both support: keep only the stronger of RISK_ON / RISK_OFF.
+  const riskLoser = (scores.find((s) => s.regime === "RISK_ON")?.score ?? 0) >= (scores.find((s) => s.regime === "RISK_OFF")?.score ?? 0) ? "RISK_OFF" : "RISK_ON";
+  const supporting = scores.slice(1).filter((s) => s.regime !== riskLoser && s.score >= Math.max(30, primary.score * 0.6)).map((s) => s.regime);
   const active = [primary, ...scores.filter((s) => supporting.includes(s.regime))];
   const conflicts: string[] = [];
   for (let i = 0; i < active.length; i++) for (let j = i + 1; j < active.length; j++) {
