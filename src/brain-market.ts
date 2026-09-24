@@ -8,7 +8,7 @@ const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
  * accurately even if the worker restarted in between (1-minute data covers ~5 days).
  */
 export const BRAIN_ASSETS = {
-  XAU: ["GC=F"], DXY: ["DX-Y.NYB"], US2Y: ["2YY=F", "^UST2Y"], US10Y: ["^TNX"], WTI: ["CL=F"], VIX: ["^VIX"], SPX: ["^GSPC"],
+  XAU: ["GC=F", "MGC=F"], DXY: ["DX-Y.NYB", "DX=F"], US2Y: ["2YY=F", "^UST2Y"], US10Y: ["^TNX"], WTI: ["CL=F"], VIX: ["^VIX"], SPX: ["^GSPC"],
   // Macro-only (daily/hourly): 30-year yield and 30-day fed funds futures (implied rate = 100 - price).
   US30Y: ["^TYX"], FEDFUNDS: ["ZQ=F"]
 } as const;

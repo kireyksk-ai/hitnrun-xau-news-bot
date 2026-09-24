@@ -26,19 +26,27 @@ const NAME: Record<string, string> = { Emas: "Emas (XAUUSD)", DXY: "Dolar (DXY)"
 const wibClock = (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(11, 16);
 const wibDay = (ms: number) => { const d = new Date(ms + 7 * 3600_000); return `${d.getUTCDate()}/${d.getUTCMonth() + 1} ${d.toISOString().slice(11, 16)}`; };
 
-export async function fetchSeries(asset: { label: string; symbol: string }, sinceMs: number): Promise<Series | null> {
-  try {
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(asset.symbol)}?range=5d&interval=15m`, {
-      headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" }, signal: AbortSignal.timeout(10_000)
-    });
-    if (!response.ok) return null;
-    const body = await response.json() as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null> }> } }> } };
-    const result = body.chart?.result?.[0];
-    const closes = result?.indicators?.quote?.[0]?.close ?? [];
-    const points = (result?.timestamp ?? []).map((t, i) => [t * 1000, closes[i]] as [number, number | null | undefined])
-      .filter((p): p is [number, number] => typeof p[1] === "number" && p[1] > 0 && p[0] >= sinceMs);
-    return points.length >= 4 ? { label: asset.label, symbol: asset.symbol, points } : null;
-  } catch (error) { log.warn({ err: error, symbol: asset.symbol }, "Briefing series fetch failed"); return null; }
+/** Alternative Yahoo symbols per asset, tried in order when the first one fails or is empty. */
+const FALLBACK: Record<string, string[]> = { "GC=F": ["GC=F", "MGC=F"], "DX-Y.NYB": ["DX-Y.NYB", "DX=F"], "^TNX": ["^TNX"], "CL=F": ["CL=F", "BZ=F"] };
+export async function fetchSeries(asset: { label: string; symbol: string }, sinceMs: number, fetcher: typeof fetch = fetch): Promise<Series | null> {
+  const problems: string[] = [];
+  for (const symbol of FALLBACK[asset.symbol] ?? [asset.symbol]) for (const host of ["query1", "query2"]) {
+    try {
+      const response = await fetcher(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=15m`, {
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0 (compatible; HitnRunFX/1.0)" }, signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) { problems.push(`${symbol}@${host} HTTP ${response.status}`); continue; }
+      const body = await response.json() as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null> }> } }> } };
+      const result = body.chart?.result?.[0];
+      const closes = result?.indicators?.quote?.[0]?.close ?? [];
+      const points = (result?.timestamp ?? []).map((t, i) => [t * 1000, closes[i]] as [number, number | null | undefined])
+        .filter((p): p is [number, number] => typeof p[1] === "number" && p[1] > 0 && p[0] >= sinceMs);
+      if (points.length >= 4) return { label: asset.label, symbol, points };
+      problems.push(`${symbol}@${host} ${points.length} titik`);
+    } catch (error) { problems.push(`${symbol}@${host} ${error instanceof Error ? error.message : "error"}`); }
+  }
+  log.warn({ asset: asset.label, problems }, "Briefing series unavailable");
+  return null;
 }
 
 export function changePct(series: Series): number {
@@ -202,7 +210,11 @@ export async function sendTelegramAlbum(token: string, destination: { chatId: st
 /** Fetch the four drivers, build both images. Returns what it could; never throws. */
 export async function briefingVisuals(kind: "ASIA" | "EROPA" | "US", sinceMs: number): Promise<{ stats: string; images: Buffer[] }> {
   const series = (await Promise.all(CHART_ASSETS.map((a) => fetchSeries(a, sinceMs)))).filter((s): s is Series => s !== null);
-  if (series.length < 3 || !series.some((s) => s.label === "Emas")) return { stats: "", images: [] };
+  // Gold plus at least one driver is enough for a meaningful picture; say clearly what is missing.
+  if (series.length < 2 || !series.some((s) => s.label === "Emas")) {
+    log.warn({ got: series.map((s) => s.label) }, "Briefing charts skipped: not enough market series");
+    return { stats: "", images: [] };
+  }
   const head = `HitNRun FX  |  ${kind === "ASIA" ? "Sesi Asia" : kind === "EROPA" ? "Sesi Eropa" : "Sesi US"}  |  ${wibDay(Date.now()).split(" ")[0]}`;
   const images: Buffer[] = [];
   for (const config of [tiltChart(series, head), moveChart(series, head, sinceMs)]) {

@@ -17,6 +17,8 @@ export type ReviewRecord = {
   renderedMessage?: string; brain?: { internal?: import("./brain-episodes.js").InternalAssessment; critic?: import("./brain-episodes.js").CriticResult };
   sentAt?: string; telegramMessageIds?: Record<string, number>;
   adminDecision?: "FALSE_NEGATIVE" | "FALSE_POSITIVE"; adminReason?: string;
+  /** Whether Sol saw the source page facts or only the headline/short summary. */
+  factsStatus?: "FULL" | "HEADLINE_ONLY";
   audit?: { provider: string; normalizedEvent: string; prefilter: "REVIEW" | "REJECT"; storyMatch: string;
     aiCalled: boolean; schema: "VALID" | "INVALID" | "NOT_CALLED"; repairAttempted: boolean; fallbackAttempted: boolean;
     outcome: "INTELLIGENCE_NOT_MATERIAL" | "AI_CONTRACT_FAILURE" | "FORMATTER_FAILURE" | "TELEGRAM_FAILURE" | "SEND" | "PENDING" };

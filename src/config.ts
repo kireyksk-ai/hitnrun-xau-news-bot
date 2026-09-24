@@ -26,6 +26,10 @@ const schema = z.object({
     BRIEFING_MORNING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
     BRIEFING_EVENING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("21:00"), // legacy, unused since the 3-session schedule
     // Europe: London local time (30 min before the London open). US: New York local time (30 min before 08:30 ET data). DST-aware.
+    // Five-year statistical backtest (no GPT). FRED_API_KEY (free) unlocks US release history.
+    BACKTEST_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+    BACKTEST_YEARS: z.coerce.number().int().min(1).max(10).default(5),
+    FRED_API_KEY: z.string().optional().transform((value) => value?.trim() || undefined),
     BRIEFING_EUROPE_LONDON: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
     BRIEFING_US_NEWYORK: z.string().regex(/^\d{2}:\d{2}$/).default("08:00"),
     // Dedicated Sol for briefings (defaults to OPENAI_MODEL) with deeper reasoning; statistic images on by default.

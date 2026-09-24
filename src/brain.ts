@@ -16,6 +16,7 @@ import { CalendarHistory, historyLine } from "./brain-calendar.js";
 import { updateOfficial } from "./brain-macro.js";
 import { stateAt } from "./brain-market.js";
 import type { CalendarEvent } from "./economic-calendar.js";
+import { currencyOf } from "./economic-calendar.js";
 import { abnormalMove, followUpQuery, huntKeys, type NewsHunter } from "./brain-hunter.js";
 import { matchPlaybook, playbookPack, priorityOf } from "./brain-events.js";
 
@@ -148,7 +149,7 @@ export class MarketBrain {
     const nowMs = Date.now();
     for (const e of events) {
       const t = Date.parse(e.releaseAt);
-      if ((e.impact === "high" || priorityOf(e.name) === "CRITICAL") && nowMs >= t - 2 * 60_000 && nowMs <= t + 20 * 60_000) this.cfg.hunter?.hunt(`cal-${e.id}`, `"${e.name}"${e.country === "US" ? " US" : ""}`, `rilis ${e.name}`, 25, 60);
+      if ((e.impact === "high" || priorityOf(e.name) === "CRITICAL") && nowMs >= t - 2 * 60_000 && nowMs <= t + 20 * 60_000) this.cfg.hunter?.hunt(`cal-${e.id}`, `"${e.name}"${currencyOf(e) === "USD" ? " US" : ""}`, `rilis ${e.name}`, 25, 60);
     }
     const added = this.calendar.observe(events, this.macro.state.official);
     for (const r of added) log.info({ event: r.name, actual: r.actual, consensus: r.consensus, surprise: r.surprise, surpriseZ: r.surpriseZ, linkage: r.linkage, expectedBias: r.expectedBias }, "Brain calendar print recorded");
@@ -171,6 +172,8 @@ export class MarketBrain {
     return lines.filter(Boolean).join("\n");
   }
   macroBrief(): string { return macroBrief(this.macro.current()); }
+  /** Official linkage regime right now (RATE / CB / MIXED). */
+  linkage(): "RATE" | "CB" | "MIXED" { return this.macro.current()?.official ?? "MIXED"; }
 
   /** Context pack appended to Sol's input: regime + most similar past episodes + applicable lessons. */
   contextFor(event: EventAssessment, article: NewsArticle): string {

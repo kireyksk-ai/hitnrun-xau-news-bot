@@ -1,4 +1,5 @@
 import type { NewsArticle, EditorialDecision } from "./types.js";
+import { needsFacts } from "./article-facts.js";
 import { assessEvent, shouldReview } from "./event-intelligence.js";
 import type { EventAssessment } from "./event-intelligence.js";
 import { hedgeScore, validateNewsOutput } from "./news-output.js";
@@ -21,6 +22,8 @@ export type PipelineDeps = {
   /** Optional: called once after a NEWS alert is accepted by Telegram (prediction ledger). */
   onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
+  /** Optional: facts Sol needs that the headline leaves out (source page sentences, calendar actual/forecast). */
+  facts?: (article: NewsArticle) => Promise<{ page: string; calendar: string }>;
   /** Optional: a calendar result already posted for this release (the news copy would be a duplicate). */
   releaseEcho?: (article: NewsArticle) => string | undefined;
   /** Optional: independent second check right before publishing (Market Brain). */
@@ -129,11 +132,18 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   if (event.candidateRoute === "PLAUSIBLE_MACRO") deps.store.increment("plausibleMacroToSol");
   else deps.store.increment("deterministicMaterialToSol");
   let enriched = article;
+  let factsStatus: ReviewRecord["factsStatus"] = needsFacts(article.title, article.summary) ? "HEADLINE_ONLY" : "FULL";
+  try {
+    const facts = await deps.facts?.(article);
+    const extra = [facts?.page ? `ARTICLE_FACTS (kalimat dari halaman sumber): ${facts.page}` : "", facts?.calendar ? `CALENDAR_MATCH (data resmi kalender): ${facts.calendar}` : ""].filter(Boolean).join("\n\n");
+    if (extra) { enriched = { ...article, summary: `${article.summary}\n\n${extra}` }; if (facts?.page || facts?.calendar) factsStatus = "FULL"; }
+  } catch { /* Facts are best-effort context; a failed page fetch never blocks an event. */ }
+  record = { ...record, factsStatus };
   try {
     const market = await deps.snapshot?.();
     const context = deps.store.marketContext(event, article, market);
     const sequence = deps.sequence?.(event, article) ?? "";
-    enriched = { ...article, summary: `${article.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}${sequence ? `\n\n${sequence}` : ""}` };
+    enriched = { ...enriched, summary: `${enriched.summary}\n\nMARKET_CONTEXT_PACK: ${JSON.stringify(context)}${sequence ? `\n\n${sequence}` : ""}` };
   } catch { /* Snapshot is context only and never blocks an event. */ }
   // Persist after building the context pack: the model sees the state that
   // existed immediately before this candidate, not a state overwritten by it.

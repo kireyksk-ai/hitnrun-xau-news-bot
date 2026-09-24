@@ -32,6 +32,10 @@ import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind, recapSince, SESSION } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
 import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatWib, goldLinkNote, printFacts, type CalendarEvent } from "./economic-calendar.js";
+import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
+import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
+import { parseRss } from "./brain-hunter.js";
+import { Backtest } from "./brain-backtest.js";
 import { calendarEcho, type PostedRelease } from "./pipeline.js";
 
 const log = pino({ level: config.LOG_LEVEL });
@@ -80,6 +84,9 @@ const brain = config.BRAIN_ENABLED ? new MarketBrain(store, editor, { basePath: 
   approve: config.POLICY_APPROVE, rollbackTo: config.POLICY_ROLLBACK_TO, report: adminSend, advisory: config.TELEGRAM_ADMIN_CHAT_ID ? adminSend : undefined,
   calendar: () => calendarEvents, hunter }) : undefined;
 const rawArchive = new RawArchive(`${config.SQLITE_PATH}.raw`);
+const backtest = config.BACKTEST_ENABLED ? new Backtest(`${config.SQLITE_PATH}.backtest`, config.FRED_API_KEY, config.BACKTEST_YEARS) : undefined;
+let backtestBusy = false;
+if (backtest) setInterval(() => { if (backtestBusy) return; backtestBusy = true; void backtest.step().catch((error) => log.warn({ err: error }, "Backtest step crashed")).finally(() => { backtestBusy = false; }); }, 20_000);
 const briefings = new BriefingLedger(`${config.SQLITE_PATH}.briefings.json`);
 let briefingBusy = false; const briefingFailures = new Map<string, number>();
 let priceCache: { at: number; price?: number } = { at: 0 };
@@ -213,7 +220,7 @@ async function calendarTick(): Promise<void> {
       lastCalendarFetchAt = now;
       try {
         // Owner-critical US releases (CPI, PCE, PPI, NFP, claims, FOMC...) are treated as high impact everywhere.
-        calendarEvents = (await fetchCalendarEvents()).map((e) => e.impact !== "high" && e.country === "US" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" as const } : e);
+        calendarEvents = (await fetchCalendarEvents()).map((e) => e.impact !== "high" && currencyOf(e) === "USD" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" as const } : e);
         for (const event of calendarEvents) calendarLedger.observe(event, Date.now());
         calendarLedger.prune(Date.now());
         const missingActual = calendarEvents.filter((event) => {
@@ -247,7 +254,7 @@ async function calendarTick(): Promise<void> {
         try {
           const upcoming = calendarEvents.filter((e) => currencyOf(e) === "USD" && (e.impact === "high" || e.impact === "medium") && Date.parse(e.releaseAt) > Date.now() && Date.parse(e.releaseAt) - Date.now() < 3 * 86400_000)
             .slice(0, 8).map((e) => `${formatWib(e.releaseAt)} ${e.name} (perkiraan ${e.consensus ?? "n/a"}, sebelumnya ${e.prior ?? "n/a"})`).join("; ");
-          const context = `${goldLinkNote("USD")}\n${brain ? await brain.calendarContext(event, "ACTUAL") : snapshot}`;
+          const context = [goldLinkNote("USD"), brain ? await brain.calendarContext(event, "ACTUAL") : snapshot, ...items.map((i) => backtest?.insight(i.event.name, brain?.linkage() ?? "MIXED") ?? "")].filter(Boolean).join("\n");
           const dive = await Promise.race([
             briefingEditor.calendarDeepDive({ releaseWib: formatWib(event.releaseAt), prints: items.map((i) => printFacts(i.event, i.saved)), context, nextEvents: upcoming ? `AGENDA BERIKUTNYA: ${upcoming}` : "AGENDA BERIKUTNYA: (kosong)" }),
             new Promise<null>((resolve) => setTimeout(() => resolve(null), 90_000))
@@ -271,7 +278,7 @@ async function calendarTick(): Promise<void> {
       // Sol writes the warning/result in the owner's voice with the playbook chain; the fixed template is the fallback.
       let explanation = calendarNarrative(event, stage, snapshot, existing), analysed = false;
       try {
-        const context = `MATA UANG: ${currency}. ${goldLinkNote(currency)}\n${brain ? await brain.calendarContext(event, stage) : snapshot}`;
+        const context = [`MATA UANG: ${currency}. ${goldLinkNote(currency)}`, brain ? await brain.calendarContext(event, stage) : snapshot, currency === "USD" ? backtest?.insight(event.name, brain?.linkage() ?? "MIXED") ?? "" : ""].filter(Boolean).join("\n");
         const consensus = (existing.firstSeenForecast !== undefined ? existing.firstSeenForecast : event.consensus) ?? null;
         const written = await Promise.race([
           briefingEditor.calendarText({ stage, name: event.name, country: currency, releaseWib: formatWib(event.releaseAt), actual: event.actual, consensus, prior: (existing.firstSeenPrior !== undefined ? existing.firstSeenPrior : event.prior) ?? null, context }),
@@ -303,6 +310,36 @@ async function adminReport(): Promise<void> {
   await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, store.report(yesterday) + appendix + `\n\n${formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir")}\n\n${formatMissedReport(shadowOutcomes.all(), new Date())}\n\n${formatLearningStatus(store)}\n\n${formatDailyLearningReview(store)}`);
   store.setLastReportDay(day);
 }
+/**
+ * Daily coverage audit (after the admin report hour): funnel of yesterday plus an independent
+ * reference sample from narrow searches. Always logged and saved to disk; sent to admin if configured.
+ */
+let lastCoverageDay = "";
+async function coverageTick(): Promise<void> {
+  const j = jakarta(new Date());
+  const hour = Math.floor(j.minutes / 60);
+  if (hour < config.ADMIN_REPORT_HOUR_WIB || lastCoverageDay === j.day) return;
+  lastCoverageDay = j.day;
+  const day = new Date(Date.now() - 86400_000).toISOString().slice(0, 10);
+  try {
+    const archive = readArchive(`${config.SQLITE_PATH}.raw`, new Date(), 3);
+    const reference: Array<{ title: string }> = [];
+    for (const q of AUDIT_QUERIES) {
+      try {
+        const url = new URL("https://news.google.com/rss/search");
+        url.searchParams.set("q", `${q} when:1d`); url.searchParams.set("hl", "en-US"); url.searchParams.set("gl", "US"); url.searchParams.set("ceid", "US:en");
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; HitnRunMarketMonitor/1.0)" }, signal: AbortSignal.timeout(12_000) });
+        if (r.ok) reference.push(...parseRss(await r.text(), new Date(Date.now() - 36 * 3600_000)).slice(0, 12));
+      } catch { /* one failed query does not stop the audit */ }
+    }
+    const f = funnel(day, archive, store.records());
+    const audit = referenceAudit(reference, archive, store.records());
+    const text = formatFunnel(f, audit);
+    saveReport(`${config.SQLITE_PATH}.coverage`, day, text);
+    log.info({ day, stages: f.stages, providers: f.providers, withFacts: f.withFacts, headlineOnly: f.headlineOnly, audit: { total: audit.total, byStatus: audit.byStatus, missing: audit.missing.slice(0, 5) } }, "Coverage audit");
+    if (config.TELEGRAM_ADMIN_CHAT_ID) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").slice(0, 3900));
+  } catch (error) { log.warn({ err: error }, "Coverage audit failed"); }
+}
 async function pollAdmin(): Promise<void> {
   if (!config.TELEGRAM_ADMIN_CHAT_ID || !config.TELEGRAM_ADMIN_USER_ID || adminPolling) return;
   adminPolling = true;
@@ -321,6 +358,12 @@ async function pollAdmin(): Promise<void> {
       else if (input === "/brain") await reply(brain?.status() ?? "Market Brain nonaktif")
       else if (input === "/rapor") await reply(formatScorecard(scorecard(predictions.all(), Date.now() - 7 * 86400000), "7 hari terakhir"));
       else if (input === "/sources") await reply(formatSourceMemoryStatus(store));
+      else if (input.startsWith("/cek ")) {
+        const query = input.slice(5).trim();
+        await reply(formatTrace(query, traceHeadline(query, readArchive(`${config.SQLITE_PATH}.raw`), store.records())).slice(0, 3900));
+      }
+      else if (input === "/backtest") await reply((backtest?.status() ?? "Backtest nonaktif").slice(0, 3900));
+      else if (input === "/corong") await reply(formatFunnel(funnel(new Date().toISOString().slice(0, 10), readArchive(`${config.SQLITE_PATH}.raw`), store.records())).slice(0, 3900));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
       else if (input.startsWith("/fn ") || input.startsWith("/fp ")) {
         const decision = input.startsWith("/fn ") ? "FALSE_NEGATIVE" : "FALSE_POSITIVE";
@@ -343,7 +386,7 @@ async function pollAdmin(): Promise<void> {
 async function tick(): Promise<void> {
   if (ticking) return; ticking = true;
   try {
-    await pollAdmin(); await adminReport();
+    await pollAdmin(); await adminReport(); await coverageTick();
     try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
     if (Date.now() - lastMarketObservationAt >= config.MARKET_OBSERVER_INTERVAL_SECONDS * 1000) {
@@ -372,6 +415,10 @@ async function tick(): Promise<void> {
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
             onSent: recordPrediction,
             important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
+            facts: async (item) => ({
+              page: needsFacts(item.title, item.summary) ? await fetchFacts(item.url).catch(() => "") : "",
+              calendar: calendarMatch(`${item.title} ${item.summary.slice(0, 300)}`, calendarEvents)
+            }),
             releaseEcho: (item) => calendarEcho(`${item.title} ${item.summary}`, postedReleases, Date.now()),
             critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
             sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
@@ -414,10 +461,10 @@ async function briefingTick(): Promise<void> {
     const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since)
       .sort((a, b) => a.sentAt!.localeCompare(b.sentAt!)).slice(-60)
       .map((r) => ({ at: r.sentAt!, theme: r.event.storyKey, title: r.article.title.replace(/\s+/g, " ").slice(0, 160) }));
-    const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : "", brain ? brain.macroBrief() : ""].filter(Boolean).join(" | ");
+    const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : "", brain ? brain.macroBrief() : "", backtest?.regime() ?? ""].filter(Boolean).join(" | ");
     const visuals = config.BRIEFING_CHARTS_ENABLED ? await briefingVisuals(kind, since) : { stats: "", images: [] };
     const input = { kind, nowWib: j.label, recapHours: hours, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
-      upcoming: upcomingEvents(calendarEvents, now, SESSION[kind].upcomingHours).map((e) => ({ ...e, history: brain?.calendarInsight(e.name) || undefined })), released: releasedEvents(calendarEvents, now, hours) };
+      upcoming: upcomingEvents(calendarEvents, now, SESSION[kind].upcomingHours).map((e) => ({ ...e, history: [brain?.calendarInsight(e.name), currencyOf({ ...e, url: "" }) === "USD" ? backtest?.insight(e.name, brain?.linkage() ?? "MIXED") : ""].filter(Boolean).join(" | ") || undefined })), released: releasedEvents(calendarEvents, now, hours) };
     let checked: ReturnType<typeof validateBriefing> = { ok: false, reason: "not generated" };
     for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input)));
     // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.

@@ -44,7 +44,7 @@ export async function abnormalMove(now = Date.now(), fetcher: typeof fetch = fet
   return { xau: +move.toFixed(2), drivers };
 }
 
-function parseRss(xml: string, since: Date): NewsArticle[] {
+export function parseRss(xml: string, since: Date): NewsArticle[] {
   const text = (item: string, tag: string) => (item.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1] ?? "")
     .replace(/^<!\[CDATA\[|\]\]>$/g, "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, " ").trim();
   return [...xml.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)].flatMap(([, item]) => {
