@@ -27,7 +27,7 @@ export function parseCalendarEvents(raw: unknown): CalendarEvent[] {
   });
 }
 
-export async function fetchCalendarEvents(fetcher: typeof fetch = fetch, now = new Date()): Promise<CalendarEvent[]> {
+async function fetchFinanceCalendar(fetcher: typeof fetch, now: Date): Promise<CalendarEvent[]> {
   const from = new Date(now.getTime() - 3 * 86400000).toISOString().slice(0, 10);
   const to = new Date(now.getTime() + 14 * 86400000).toISOString().slice(0, 10);
   const url = new URL("https://www.financecalendar.com/wp-json/fc/v1/calendar");
@@ -36,6 +36,59 @@ export async function fetchCalendarEvents(fetcher: typeof fetch = fetch, now = n
   const response = await fetcher(url, { headers: { accept: "application/json", "user-agent": "HitnRun-XAU-Calendar/1.0" }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Economic calendar HTTP ${response.status}`);
   return parseCalendarEvents(await response.json());
+}
+
+/** Common names so the owner playbook, backtest and wire matching recognise ForexFactory titles. */
+const CANONICAL: Array<[RegExp, string]> = [
+  [/^unemployment claims$/i, "Initial Jobless Claims"], [/^non-farm employment change$/i, "Nonfarm Payrolls"],
+  [/^adp non-farm employment change$/i, "ADP Nonfarm Employment Change"], [/^federal funds rate$/i, "FOMC Federal Funds Rate"]
+];
+export function canonicalName(title: string): string { return CANONICAL.find(([re]) => re.test(title.trim()))?.[1] ?? title.trim(); }
+/**
+ * ForexFactory weekly JSON: complete schedule with clean currency codes and numeric forecasts
+ * (e.g. claims "201K" instead of "around 235,000 to 240,000"). It has no actuals; those come
+ * from the wires (calendar-actuals.ts) or from the secondary calendar when it has them.
+ */
+export function parseForexFactory(raw: unknown): CalendarEvent[] {
+  if (!Array.isArray(raw)) throw new Error("Invalid ForexFactory calendar response");
+  return (raw as RawEvent[]).flatMap((item) => {
+    const impact = String(item.impact ?? "").toLowerCase();
+    const title = text(item.title), country = text(item.country), date = text(item.date);
+    if (!title || !country || !date || !["high", "medium", "low"].includes(impact)) return [];
+    const at = new Date(date);
+    if (Number.isNaN(at.getTime())) return [];
+    const name = canonicalName(title);
+    const slug = `${country}-${title}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return [{ id: `ff:${slug}:${at.toISOString()}`, name, country, releaseAt: at.toISOString(), consensus: text(item.forecast), prior: text(item.previous),
+      actual: text(item.actual), impact: impact as CalendarEvent["impact"], url: `https://www.forexfactory.com/calendar#${slug}-${at.toISOString().slice(0, 10)}` }];
+  });
+}
+let ffCache: { at: number; events: CalendarEvent[] } | null = null;
+async function fetchForexFactory(fetcher: typeof fetch, now: Date): Promise<CalendarEvent[]> {
+  // The feed updates hourly and rate-limits aggressive polling: at most one refresh every 10 minutes.
+  if (ffCache && now.getTime() - ffCache.at < 10 * 60_000) return ffCache.events;
+  const events: CalendarEvent[] = [];
+  for (const week of ["thisweek", "nextweek"]) {
+    try {
+      const r = await fetcher(`https://nfs.faireconomy.media/ff_calendar_${week}.json`, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; HitnRun-XAU-Calendar/1.0)" }, signal: AbortSignal.timeout(15000) });
+      if (r.ok) events.push(...parseForexFactory(await r.json()));
+      else if (week === "thisweek") throw new Error(`ForexFactory HTTP ${r.status}`);
+    } catch (error) { if (week === "thisweek") throw error; }
+  }
+  ffCache = { at: now.getTime(), events };
+  return events;
+}
+const sameRelease = (a: CalendarEvent, b: CalendarEvent) => Math.abs(Date.parse(a.releaseAt) - Date.parse(b.releaseAt)) <= 5 * 60_000 && currencyOf(a) === currencyOf(b)
+  && a.name.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3).some((w) => b.name.toLowerCase().includes(w));
+/** ForexFactory first (complete schedule and forecasts); the secondary calendar only fills actuals, or takes over if FF is down. */
+export async function fetchCalendarEvents(fetcher: typeof fetch = fetch, now = new Date()): Promise<CalendarEvent[]> {
+  const [ff, fc] = await Promise.allSettled([fetchForexFactory(fetcher, now), fetchFinanceCalendar(fetcher, now)]);
+  const primary = ff.status === "fulfilled" ? ff.value : [];
+  const secondary = fc.status === "fulfilled" ? fc.value : [];
+  if (!primary.length) { if (fc.status === "rejected" && ff.status === "rejected") throw ff.reason; return secondary; }
+  const lo = now.getTime() - 3 * 86400_000, hi = now.getTime() + 14 * 86400_000;
+  return primary.filter((e) => Date.parse(e.releaseAt) >= lo && Date.parse(e.releaseAt) <= hi)
+    .map((e) => e.actual ? e : { ...e, actual: secondary.find((x) => x.actual && sameRelease(e, x))?.actual ?? null });
 }
 
 export function formatWib(releaseAt: string): string {
@@ -202,6 +255,7 @@ export function countryTag(currency: string, country = ""): string {
 
 export function currencyOf(e: Pick<CalendarEvent, "country" | "name" | "url">): string {
   const c = (e.country || "").toUpperCase();
+  if (/^(USD|EUR|GBP|JPY|CNY|AUD|CAD|NZD|CHF)$/.test(c)) return c;
   const byCountry: Record<string, string> = { US: "USD", USA: "USD", EU: "EUR", EZ: "EUR", EMU: "EUR", DE: "EUR", FR: "EUR", IT: "EUR", ES: "EUR", GB: "GBP", UK: "GBP", JP: "JPY", CN: "CNY", AU: "AUD", CA: "CAD", NZ: "NZD", CH: "CHF" };
   if (byCountry[c]) return byCountry[c];
   // The name decides first; the URL slug is only a fallback.

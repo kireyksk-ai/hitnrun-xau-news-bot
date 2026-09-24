@@ -36,6 +36,8 @@ import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
 import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
 import { parseRss } from "./brain-hunter.js";
 import { Backtest } from "./brain-backtest.js";
+import { ActualCapture, type Captured } from "./calendar-actuals.js";
+import { sourceTier } from "./event-intelligence.js";
 import { calendarEcho, type PostedRelease } from "./pipeline.js";
 
 const log = pino({ level: config.LOG_LEVEL });
@@ -71,6 +73,10 @@ let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
 const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
 const postedReleases: PostedRelease[] = [];
+// Actuals read from the wires (calendar feeds are often late or empty); applied on every calendar refresh.
+const actualCapture = new ActualCapture();
+const capturedActuals = new Map<string, Captured>();
+const withCaptured = (events: CalendarEvent[]) => events.map((e) => !e.actual && capturedActuals.has(e.id) ? { ...e, actual: capturedActuals.get(e.id)!.actual } : e);
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
@@ -220,7 +226,7 @@ async function calendarTick(): Promise<void> {
       lastCalendarFetchAt = now;
       try {
         // Owner-critical US releases (CPI, PCE, PPI, NFP, claims, FOMC...) are treated as high impact everywhere.
-        calendarEvents = (await fetchCalendarEvents()).map((e) => e.impact !== "high" && currencyOf(e) === "USD" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" as const } : e);
+        calendarEvents = withCaptured((await fetchCalendarEvents()).map((e) => e.impact !== "high" && currencyOf(e) === "USD" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" as const } : e));
         for (const event of calendarEvents) calendarLedger.observe(event, Date.now());
         calendarLedger.prune(Date.now());
         const missingActual = calendarEvents.filter((event) => {
@@ -247,6 +253,9 @@ async function calendarTick(): Promise<void> {
       const snapshot = await marketSnapshot().catch(() => "");
       // US results: one institutional note per release time covering every US print released together.
       if (stage === "ACTUAL" && currency === "USD" && event.actual) {
+        // Prints released together (CPI m/m, y/y, core...) arrive seconds apart: wait up to 3 minutes for the set.
+        const set = calendarEvents.filter((e) => e.releaseAt === event.releaseAt && currencyOf(e) === "USD" && e.impact !== "low");
+        if (set.some((e) => !e.actual) && Date.now() - Date.parse(event.releaseAt) < 180_000) continue;
         const group = calendarEvents.filter((e) => e.releaseAt === event.releaseAt && currencyOf(e) === "USD" && e.actual && !doneThisTick.has(e.id)
           && dueStage(e, Date.now(), calendarLedger!.get(e.id), destinations.map((item) => item.chatId)) === "ACTUAL")
           .sort((a, b) => (a.impact === "high" ? 0 : 1) - (b.impact === "high" ? 0 : 1));
@@ -407,6 +416,16 @@ async function tick(): Promise<void> {
         store.providerLatency(provider.name, Date.now() - now);
         for (const article of articles.sort((a, b) => a.publishedAt.getTime() - b.publishedAt.getTime())) {
           rawArchive.append(provider.name, article);
+          try {
+            for (const c of actualCapture.offer(article, sourceTier(article), calendarEvents)) {
+              capturedActuals.set(c.id, c);
+              calendarEvents = withCaptured(calendarEvents);
+              // The calendar result will carry this number; the news copy of it is then a duplicate.
+              postedReleases.push({ at: Date.now(), name: c.name, actual: c.actual });
+              log.info({ event: c.name, actual: c.actual, source: c.source }, "Calendar actual captured from wire");
+              void calendarTick().catch((error) => log.warn({ err: error }, "Calendar tick after capture failed"));
+            }
+          } catch (error) { log.warn({ err: error }, "Actual capture failed"); }
           const result = await processArticle(article, {
             store, snapshot: marketSnapshot,
             analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
