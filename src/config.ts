@@ -24,7 +24,10 @@ const schema = z.object({
     // Scheduled desk briefings to the news groups (WIB). Morning Mon-Sat, evening Mon-Fri.
     BRIEFING_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     BRIEFING_MORNING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
-    BRIEFING_EVENING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("21:00"),
+    BRIEFING_EVENING_WIB: z.string().regex(/^\d{2}:\d{2}$/).default("21:00"), // legacy, unused since the 3-session schedule
+    // Europe: London local time (30 min before the London open). US: New York local time (30 min before 08:30 ET data). DST-aware.
+    BRIEFING_EUROPE_LONDON: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
+    BRIEFING_US_NEWYORK: z.string().regex(/^\d{2}:\d{2}$/).default("08:00"),
     // Dedicated Sol for briefings (defaults to OPENAI_MODEL) with deeper reasoning; statistic images on by default.
     BRIEFING_MODEL: z.string().optional(),
     BRIEFING_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
@@ -39,6 +42,8 @@ const schema = z.object({
     BRAIN_MAX_DRAWDOWN_PCT: z.coerce.number().min(0.5).max(30).default(5),
     POLICY_APPROVE: z.string().optional(),
     POLICY_ROLLBACK_TO: z.string().optional(),
+    // Currencies whose releases are posted. USD: high and medium; others: high-impact only (their gold link is explained).
+    CALENDAR_CURRENCIES: z.string().default("USD,EUR,GBP,JPY,CNY,AUD,CAD").transform((v) => v.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)),
     ECONOMIC_CALENDAR_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     GNEWS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(120).default(120),
     OFFICIAL_MACRO_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),

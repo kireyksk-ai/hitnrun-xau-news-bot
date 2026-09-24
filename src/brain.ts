@@ -156,6 +156,20 @@ export class MarketBrain {
   }
   /** "Last times this print beat/missed, gold did X" for briefings and Sol. */
   calendarInsight(name: string): string { return historyLine(this.calendar.all(), { name }); }
+  /** Everything Sol needs to explain a scheduled release: owner chain, regime, history, and the market move since the print. */
+  async calendarContext(e: CalendarEvent, stage: "WARNING" | "ACTUAL"): Promise<string> {
+    const m = this.macro.current();
+    const pack = playbookPack(e.name, { linkage: m?.official ?? "MIXED", oil24h: m?.live?.oil24h, us30y: m?.live?.us30y, dxy24h: m?.live?.dxy24h });
+    const lines = [pack, macroBrief(m), this.calendarInsight(e.name)];
+    if (stage === "ACTUAL") {
+      const t = Date.parse(e.releaseAt);
+      const [pre, now] = (await Promise.all([stateAt(t - 2 * 60_000).catch(() => ({})), stateAt(Date.now()).catch(() => ({}))])) as Array<Record<string, number | undefined>>;
+      const mv = (a: string) => pre[a] !== undefined && now[a] !== undefined ? (a === "US10Y" || a === "US2Y" ? `${((now[a]! - pre[a]!) * 100).toFixed(1)}bp` : a === "VIX" ? `${(now[a]! - pre[a]!).toFixed(2)} poin` : `${(((now[a]! - pre[a]!) / pre[a]!) * 100).toFixed(2)}%`) : "n/a";
+      const curve = ["US2Y", "US10Y"].every((a) => pre[a] !== undefined && now[a] !== undefined) ? `${(((now.US10Y! - now.US2Y!) - (pre.US10Y! - pre.US2Y!)) * 100).toFixed(1)}bp` : "n/a";
+      lines.push(`REAKSI SEJAK RILIS (${Math.round((Date.now() - t) / 60_000)} menit): XAU ${mv("XAU")}, DXY ${mv("DXY")}, US2Y ${mv("US2Y")}, US10Y ${mv("US10Y")}, kurva 2s10s ${curve}, WTI ${mv("WTI")}, S&P500 ${mv("SPX")}, VIX ${mv("VIX")}`);
+    }
+    return lines.filter(Boolean).join("\n");
+  }
   macroBrief(): string { return macroBrief(this.macro.current()); }
 
   /** Context pack appended to Sol's input: regime + most similar past episodes + applicable lessons. */

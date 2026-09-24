@@ -15,8 +15,13 @@ export const CHART_ASSETS = [
   { label: "Yield US10Y", symbol: "^TNX" },
   { label: "Minyak", symbol: "CL=F" }
 ] as const;
-const COLORS: Record<string, string> = { Emas: "#F5B700", DXY: "#4FA3FF", "Yield US10Y": "#FF6B6B", Minyak: "#9AA5B1" };
-const BG = "#0E1116", GRID = "rgba(255,255,255,0.08)", TEXT = "#E6E8EB";
+// Line colours are neutral identity colours (no red/green there: red/green is reserved for "effect on gold").
+const COLORS: Record<string, string> = { Emas: "#F2C14E", DXY: "#4FA3FF", "Yield US10Y": "#C084FC", Minyak: "#2DD4BF" };
+const BG = "#0E1116", GRID = "rgba(255,255,255,0.07)", TEXT = "#E6E8EB", MUTED = "#9AA3AD";
+const EFFECT = { pressure: "#E5484D", support: "#30A46C", neutral: "#8B95A1", result: "#F2C14E" } as const;
+/** Typical 24h move, used to show how big today's move is (bar length = multiple of normal). */
+const NORMAL: Record<string, number> = { Emas: 1.0, DXY: 0.4, "Yield US10Y": 6, Minyak: 2.0 };
+const NAME: Record<string, string> = { Emas: "Emas (XAUUSD)", DXY: "Dolar (DXY)", "Yield US10Y": "Yield US 10 tahun", Minyak: "Minyak WTI" };
 
 const wibClock = (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(11, 16);
 const wibDay = (ms: number) => { const d = new Date(ms + 7 * 3600_000); return `${d.getUTCDate()}/${d.getUTCMonth() + 1} ${d.toISOString().slice(11, 16)}`; };
@@ -40,6 +45,15 @@ export function changePct(series: Series): number {
   const first = series.points[0][1], last = series.points[series.points.length - 1][1];
   return (last - first) / first * 100;
 }
+const isYield = (label: string) => label === "Yield US10Y";
+/** Move in the unit traders use: basis points for a yield, % for everything else. */
+export function changeOf(series: Series): number {
+  const first = series.points[0][1], last = series.points[series.points.length - 1][1];
+  return isYield(series.label) ? (last - first) * 100 : (last - first) / first * 100;
+}
+export function fmtChange(label: string, v: number): string {
+  return `${v >= 0 ? "+" : ""}${v.toFixed(isYield(label) ? 1 : 2)}${isYield(label) ? " bp" : "%"}`;
+}
 
 /** Pressure on gold from each driver's move (old "timbangan": DXY, yield, oil, XAU). */
 export function goldTilt(label: string, pct: number): "support" | "pressure" | "neutral" {
@@ -52,58 +66,103 @@ export function goldTilt(label: string, pct: number): "support" | "pressure" | "
 export function statsLine(series: Series[], sinceMs: number): string {
   if (!series.length) return "";
   return `PERUBAHAN SEJAK ${wibDay(sinceMs)} WIB (sama dengan gambar yang dikirim): ` +
-    series.map((s) => `${s.label} ${changePct(s) >= 0 ? "+" : ""}${changePct(s).toFixed(2)}%`).join(" | ");
+    series.map((s) => `${s.label} ${fmtChange(s.label, changeOf(s))}`).join(" | ");
 }
 
-/** Line chart of % change from the window start, sampled on a shared 30-minute grid. */
-export function moveChart(series: Series[], title: string): object {
+const FONT = "Helvetica, Arial, sans-serif";
+const disp = (label: string, v: number) => fmtChange(label, v).replace("-", "\u2212");
+/** Shared header: bold headline, muted explanation, small brand line; left aligned like a financial chart. */
+function header(headline: string, detail: string, brand: string) {
+  return {
+    title: { display: true, text: headline, align: "start", color: TEXT, font: { family: FONT, size: 26, weight: 700 }, padding: { top: 4, bottom: 6 } },
+    subtitle: { display: true, text: [detail, brand], align: "start", color: MUTED, font: { family: FONT, size: 15, lineHeight: 1.5 }, padding: { bottom: 18 } }
+  };
+}
+
+/** Line chart: % change for gold, dollar and oil (left axis), 10Y yield in basis points (right axis). */
+export function moveChart(series: Series[], brand: string, sinceMs = series[0]?.points[0][0] ?? 0): object {
   const start = Math.min(...series.map((s) => s.points[0][0])), end = Math.max(...series.map((s) => s.points[s.points.length - 1][0]));
   const step = Math.max(30 * 60_000, Math.ceil((end - start) / 48 / 60_000) * 60_000);
   const grid: number[] = []; for (let t = start; t <= end; t += step) grid.push(t);
   const at = (s: Series, t: number) => { let v: number | null = null; for (const p of s.points) { if (p[0] <= t) v = p[1]; else break; } return v; };
+  const hasYield = series.some((s) => isYield(s.label));
+  // Both axes symmetric around zero so the 0% and 0 bp lines coincide (no misleading offset).
+  const nice = (x: number) => { const steps = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50, 75, 100]; return steps.find((v) => v >= x) ?? Math.ceil(x); };
+  const pctMax = nice(Math.max(0.25, ...series.filter((s) => !isYield(s.label)).flatMap((s) => s.points.map((p) => Math.abs((p[1] - s.points[0][1]) / s.points[0][1] * 100)))) * 1.1);
+  const bpMax = nice(Math.max(2, ...series.filter((s) => isYield(s.label)).flatMap((s) => s.points.map((p) => Math.abs((p[1] - s.points[0][1]) * 100)))) * 1.1);
+  const gold = series.find((s) => s.label === "Emas");
+  const hours = Math.max(1, Math.round((end - start) / 3600_000));
+  const headline = gold ? `Emas ${changeOf(gold) >= 0 ? "naik" : "turun"} ${Math.abs(changeOf(gold)).toFixed(2)}% dalam ${hours} jam terakhir` : "Pergerakan pasar";
+  const tick = { color: MUTED, font: { family: FONT, size: 13 } };
   return {
     type: "line",
     data: {
       labels: grid.map(wibClock),
       datasets: series.map((s) => {
         const base = s.points[0][1];
-        return { label: s.label, borderColor: COLORS[s.label], backgroundColor: COLORS[s.label], fill: false, pointRadius: 0, lineTension: 0.25,
-          borderWidth: s.label === "Emas" ? 4 : 2.5, data: grid.map((t) => { const v = at(s, t); return v === null ? null : +((v - base) / base * 100).toFixed(3); }) };
+        return { label: `${NAME[s.label] ?? s.label}  ${disp(s.label, changeOf(s))}`,
+          borderColor: COLORS[s.label], backgroundColor: COLORS[s.label], fill: false, pointRadius: 0, tension: 0.2, spanGaps: true,
+          borderWidth: s.label === "Emas" ? 4 : 2.5, borderDash: isYield(s.label) ? [8, 5] : [], yAxisID: isYield(s.label) ? "bp" : "pct",
+          data: grid.map((t) => { const v = at(s, t); return v === null ? null : isYield(s.label) ? +((v - base) * 100).toFixed(2) : +((v - base) / base * 100).toFixed(3); }) };
       })
     },
     options: {
-      title: { display: true, text: [title, "Perubahan % sejak awal periode (WIB)"], fontColor: TEXT, fontSize: 18 },
-      legend: { position: "bottom", labels: { fontColor: TEXT, fontSize: 14 } },
-      scales: {
-        xAxes: [{ ticks: { fontColor: TEXT, maxTicksLimit: 8 }, gridLines: { color: GRID } }],
-        yAxes: [{ ticks: { fontColor: TEXT, callback: "__PCT__" }, gridLines: { color: GRID, zeroLineColor: "rgba(255,255,255,0.35)" } }]
+      layout: { padding: { top: 12, left: 16, right: 16, bottom: 8 } },
+      plugins: {
+        ...header(headline, `Perubahan sejak ${wibDay(sinceMs)} WIB${hasYield ? ". Yield US 10 tahun dalam basis point (garis putus-putus, sumbu kanan)." : "."}`, brand),
+        legend: { position: "top", align: "start", labels: { color: TEXT, font: { family: FONT, size: 14 }, boxWidth: 14, boxHeight: 14, padding: 18 } },
+        datalabels: { display: false }
       },
-      plugins: { datalabels: { display: false } }
+      scales: {
+        x: { ticks: { ...tick, maxTicksLimit: 9, maxRotation: 0 }, grid: { color: GRID } },
+        pct: { position: "left", min: -pctMax, max: pctMax, title: { display: true, text: "Perubahan (%)", ...tick }, ticks: { ...tick, callback: "__PCT__" }, grid: { color: GRID } },
+        ...(hasYield ? { bp: { position: "right", min: -bpMax, max: bpMax, title: { display: true, text: "Yield (bp)", color: COLORS["Yield US10Y"], font: tick.font }, ticks: { color: COLORS["Yield US10Y"], font: tick.font, callback: "__BP__" }, grid: { drawOnChartArea: false } } } : {})
+      }
     }
   };
 }
 
-/** Horizontal bars: each driver's move, coloured by what it does to gold. */
-export function tiltChart(series: Series[], title: string): object {
-  const colour = { support: "#2ECC71", pressure: "#E74C3C", neutral: "#7F8C8D" } as const;
-  const rows = series.map((s) => ({ label: s.label, pct: +changePct(s).toFixed(2), tilt: goldTilt(s.label, changePct(s)) }));
-  const pressure = rows.filter((r) => r.label !== "Emas" && r.tilt === "pressure").length, support = rows.filter((r) => r.label !== "Emas" && r.tilt === "support").length;
-  const verdict = pressure > support ? "Timbangan condong: NEKAN EMAS" : support > pressure ? "Timbangan condong: NOPANG EMAS" : "Timbangan: TABRAKAN / SEIMBANG";
-  const raw = Math.max(0.2, ...rows.map((r) => Math.abs(r.pct))) * 1.3;
-  const stepSize = raw <= 0.5 ? 0.1 : raw <= 1.2 ? 0.25 : raw <= 2.5 ? 0.5 : 1;
-  const span = Math.ceil(raw / stepSize) * stepSize;
+/**
+ * The old "timbangan" as one picture: each driver's move coloured by its effect on gold
+ * (red = menekan, green = menopang, grey = dua arah), gold itself shown as the result.
+ * Units differ (%, bp), so bar length = how many times a normal 24h move it is; the label shows the real move.
+ */
+export function tiltChart(series: Series[], brand: string): object {
+  const rows = series.map((s) => {
+    const v = changeOf(s), pct = changePct(s);
+    const tilt = s.label === "Emas" ? "result" as const : goldTilt(s.label, pct);
+    const size = +(Math.abs(v) / (NORMAL[s.label] ?? 1)).toFixed(2);
+    const effect = tilt === "result" ? "hasil akhir" : tilt === "pressure" ? "menekan emas" : tilt === "support" ? "menopang emas" : "dua arah";
+    return { label: s.label, v, tilt, bar: v >= 0 ? size : -size, text: `${disp(s.label, v)}  ${effect}` };
+  });
+  const drivers = rows.filter((r) => r.label !== "Emas");
+  const pressure = drivers.filter((r) => r.tilt === "pressure").length, support = drivers.filter((r) => r.tilt === "support").length;
+  const headline = pressure > support ? "Tekanan ke emas lebih dominan" : support > pressure ? "Faktor pendukung emas lebih dominan" : "Faktor penggerak emas seimbang";
+  const gold = rows.find((r) => r.label === "Emas");
+  const detail = `${pressure} dari ${drivers.length} faktor menekan emas, ${support} menopang.${gold ? ` Emas ${disp("Emas", gold.v)} pada periode yang sama.` : ""}`;
+  const order = [...drivers, ...(gold ? [gold] : [])];
+  const span = Math.max(1.5, Math.ceil(Math.max(...order.map((r) => Math.abs(r.bar))) * 1.6 * 2) / 2);
+  const groups: Array<[keyof typeof EFFECT, string]> = [["pressure", "Menekan emas"], ["support", "Menopang emas"], ["neutral", "Dua arah (inflasi vs risiko)"], ["result", "Emas (hasil akhir)"]];
+  const tick = { color: MUTED, font: { family: FONT, size: 13 } };
   return {
-    type: "horizontalBar",
-    data: { labels: rows.map((r) => r.label), datasets: [{ data: rows.map((r) => r.pct), backgroundColor: rows.map((r) => colour[r.tilt]) }] },
+    type: "bar",
+    data: {
+      labels: order.map((r) => NAME[r.label] ?? r.label),
+      datasets: groups.map(([key, name]) => ({ label: name, backgroundColor: EFFECT[key], borderRadius: 4, barPercentage: 0.72, categoryPercentage: 0.9,
+        data: order.map((r) => r.tilt === key ? r.bar : null), txt: order.map((r) => r.tilt === key ? r.text : "") }))
+    },
     options: {
-      title: { display: true, text: [title, verdict, "merah = nekan emas · hijau = nopang emas · abu = dua arah"], fontColor: TEXT, fontSize: 18 },
-      legend: { display: false },
-      layout: { padding: { left: 10, right: 40 } },
-      scales: {
-        xAxes: [{ ticks: { fontColor: TEXT, callback: "__PCT__", min: -span, max: span, stepSize }, gridLines: { color: GRID, zeroLineColor: "rgba(255,255,255,0.5)" } }],
-        yAxes: [{ ticks: { fontColor: TEXT, fontSize: 15 }, gridLines: { display: false } }]
+      indexAxis: "y",
+      layout: { padding: { top: 12, left: 16, right: 28, bottom: 8 } },
+      plugins: {
+        ...header(headline, detail, brand),
+        legend: { position: "bottom", align: "start", labels: { color: TEXT, font: { family: FONT, size: 14 }, boxWidth: 14, boxHeight: 14, padding: 18 } },
+        datalabels: { color: TEXT, anchor: "end", align: "end", clamp: true, font: { family: FONT, size: 14, weight: 700 }, formatter: "__LABEL__" }
       },
-      plugins: { datalabels: { color: TEXT, anchor: "end", align: "end", font: { size: 14, weight: "bold" }, formatter: "__LABEL__" } }
+      scales: {
+        x: { stacked: true, min: -span, max: span, ticks: { ...tick, callback: "__X__" }, title: { display: true, text: "Besar gerakan dibanding gerakan harian normal (1x = normal)", ...tick }, grid: { color: GRID } },
+        y: { stacked: true, ticks: { color: TEXT, font: { family: FONT, size: 15 } }, grid: { display: false } }
+      }
     }
   };
 }
@@ -111,14 +170,16 @@ export function tiltChart(series: Series[], title: string): object {
 /** Chart.js configs need JS callbacks; QuickChart accepts the config as a JS string. */
 export function chartSource(config: object): string {
   return JSON.stringify(config)
-    .replace(/"__PCT__"/g, "function(v){return (v>0?'+':'')+v+'%'}")
-    .replace(/"__LABEL__"/g, "function(v){return (v>0?'+':'')+v.toFixed(2)+'%'}");
+    .replace(/"__PCT__"/g, "function(v){return (v>0?'+':v<0?'\\u2212':'')+Math.abs(v)+'%'}")
+    .replace(/"__BP__"/g, "function(v){return (v>0?'+':v<0?'\\u2212':'')+Math.abs(v)+' bp'}")
+    .replace(/"__X__"/g, "function(v){return v===0?'0':Math.abs(v)+'x'}")
+    .replace(/"__LABEL__"/g, "function(v,c){return v===null?'':c.dataset.txt[c.dataIndex]}");
 }
 
-export async function renderChart(config: object, width = 900, height = 520): Promise<Buffer> {
+export async function renderChart(config: object, width = 1000, height = 620): Promise<Buffer> {
   const response = await fetch("https://quickchart.io/chart", {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
-    body: JSON.stringify({ chart: chartSource(config), width, height, backgroundColor: BG, format: "png", version: "2", devicePixelRatio: 2 })
+    body: JSON.stringify({ chart: chartSource(config), width, height, backgroundColor: BG, format: "png", version: "4", devicePixelRatio: 2 })
   });
   if (!response.ok) throw new Error(`QuickChart ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
@@ -139,12 +200,12 @@ export async function sendTelegramAlbum(token: string, destination: { chatId: st
 }
 
 /** Fetch the four drivers, build both images. Returns what it could; never throws. */
-export async function briefingVisuals(kind: "PAGI" | "MALAM", sinceMs: number): Promise<{ stats: string; images: Buffer[] }> {
+export async function briefingVisuals(kind: "ASIA" | "EROPA" | "US", sinceMs: number): Promise<{ stats: string; images: Buffer[] }> {
   const series = (await Promise.all(CHART_ASSETS.map((a) => fetchSeries(a, sinceMs)))).filter((s): s is Series => s !== null);
   if (series.length < 3 || !series.some((s) => s.label === "Emas")) return { stats: "", images: [] };
-  const head = kind === "PAGI" ? "HITnRUN FX · Morning recap" : "HITnRUN FX · Evening recap";
+  const head = `HitNRun FX  |  ${kind === "ASIA" ? "Sesi Asia" : kind === "EROPA" ? "Sesi Eropa" : "Sesi US"}  |  ${wibDay(Date.now()).split(" ")[0]}`;
   const images: Buffer[] = [];
-  for (const config of [moveChart(series, head), tiltChart(series, head)]) {
+  for (const config of [tiltChart(series, head), moveChart(series, head, sinceMs)]) {
     try { images.push(await renderChart(config)); } catch (error) { log.warn({ err: error }, "Briefing chart render failed"); }
   }
   return { stats: statsLine(series, sinceMs), images };

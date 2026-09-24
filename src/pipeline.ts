@@ -21,6 +21,8 @@ export type PipelineDeps = {
   /** Optional: called once after a NEWS alert is accepted by Telegram (prediction ledger). */
   onSent?: (record: ReviewRecord, call: import("./editor.js").GoldCall | undefined) => void | Promise<void>;
   snapshot?: () => Promise<string | null>;
+  /** Optional: a calendar result already posted for this release (the news copy would be a duplicate). */
+  releaseEcho?: (article: NewsArticle) => string | undefined;
   /** Optional: independent second check right before publishing (Market Brain). */
   /** Optional: owner-priority events (playbook) that must always reach Sol, even below the importance filter. */
   important?: (article: NewsArticle, event: EventAssessment) => boolean;
@@ -68,6 +70,20 @@ export function sentDuplicate(event: EventAssessment, message: string, records: 
     const sameText = r.renderedMessage ? factSim >= 0.3 && similarity(text, tokens(r.renderedMessage.replace(/<[^>]+>/g, " "))) >= 0.7 : false;
     return sameFact || sameText;
   });
+}
+
+export type PostedRelease = { at: number; name: string; actual: string };
+/** A headline about a scheduled release whose result the bot already posted (same event name + same number, within 90 minutes). */
+export function calendarEcho(text: string, posted: PostedRelease[], now: number): string | undefined {
+  const t = text.toLowerCase();
+  for (const p of posted) {
+    if (now - p.at > 90 * 60_000) continue;
+    const nameWords = p.name.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !["the", "and", "rate", "index", "yoy", "mom"].includes(w));
+    const hits = nameWords.filter((w) => t.includes(w)).length;
+    const num = p.actual.replace(/[^0-9.\-]/g, "");
+    if (hits >= Math.min(2, nameWords.length) && num && t.includes(num)) return p.name;
+  }
+  return undefined;
 }
 
 export async function processArticle(article: NewsArticle, deps: PipelineDeps): Promise<ReviewRecord> {
@@ -220,6 +236,13 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     return record;
   }
   let newsMessage = message;
+  const releaseDup = deps.releaseEcho?.(article);
+  if (releaseDup) {
+    deps.store.increment("duplicatesRemoved"); deps.store.markProcessedIdentity(article, event.key);
+    record = { ...record, stage: "DUPLICATE", primaryDecision: "DROP", reason: `CALENDAR_ALREADY_POSTED: ${releaseDup}` };
+    deps.store.record(record);
+    return record;
+  }
   const already = sentDuplicate(event, newsMessage, deps.store.records(), now);
   if (already) {
     deps.store.increment("duplicatesRemoved"); deps.store.markProcessedIdentity(article, event.key);

@@ -29,9 +29,10 @@ import { RawArchive } from "./brain-store.js";
 import { NewsHunter } from "./brain-hunter.js";
 import { mustReview, priorityOf } from "./brain-events.js";
 import { regimeBrief } from "./brain-regime.js";
-import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind } from "./briefing.js";
+import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind, recapSince, SESSION } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
-import { CalendarLedger, calendarNarrative, dueStage, fetchCalendarEvents, formatCalendarMessage, type CalendarEvent } from "./economic-calendar.js";
+import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatWib, goldLinkNote, printFacts, type CalendarEvent } from "./economic-calendar.js";
+import { calendarEcho, type PostedRelease } from "./pipeline.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
@@ -65,6 +66,7 @@ let aiDay = "", aiCount = 0, ticking = false, adminPolling = false;
 let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
 const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
+const postedReleases: PostedRelease[] = [];
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
 let lastScoringAt = 0, lastPublicScorecardWeek = "";
@@ -205,7 +207,9 @@ async function calendarTick(): Promise<void> {
   calendarTicking = true;
   try {
     const now = Date.now();
-    if (now - lastCalendarFetchAt >= 300000) {
+    // Around a high-impact release refresh every minute so the result is posted fast; otherwise every 5 minutes.
+    const hot = calendarEvents.some((e) => e.impact === "high" && config.CALENDAR_CURRENCIES.includes(currencyOf(e)) && !e.actual && now >= Date.parse(e.releaseAt) - 60_000 && now <= Date.parse(e.releaseAt) + 45 * 60_000);
+    if (now - lastCalendarFetchAt >= (hot ? 60_000 : 300000)) {
       lastCalendarFetchAt = now;
       try {
         // Owner-critical US releases (CPI, PCE, PPI, NFP, claims, FOMC...) are treated as high impact everywhere.
@@ -220,7 +224,11 @@ async function calendarTick(): Promise<void> {
         if (missingActual.length) log.warn({ events: missingActual.map((event) => event.name) }, "Calendar release still has no actual; no result will be invented");
       } catch (error) { log.warn({ err: error }, "Economic calendar refresh failed; keeping prior schedule"); }
     }
+    const doneThisTick = new Set<string>();
     for (const event of calendarEvents) {
+      if (doneThisTick.has(event.id)) continue;
+      const currency = currencyOf(event);
+      if (!config.CALENDAR_CURRENCIES.includes(currency) || (currency !== "USD" && event.impact !== "high")) continue;
       const existing = calendarLedger.get(event.id);
       const stage = dueStage(event, Date.now(), existing, destinations.map((item) => item.chatId));
       if (!stage || store.safeMode) continue;
@@ -230,10 +238,51 @@ async function calendarTick(): Promise<void> {
       const pending = destinations.filter((destination) => !existing[stage === "WARNING" ? "warnedTo" : "actualTo"]?.[destination.chatId]);
       if (!pending.length) continue;
       const snapshot = await marketSnapshot().catch(() => "");
-      const message = formatCalendarMessage(event, stage, calendarNarrative(event, stage, snapshot, existing), existing);
+      // US results: one institutional note per release time covering every US print released together.
+      if (stage === "ACTUAL" && currency === "USD" && event.actual) {
+        const group = calendarEvents.filter((e) => e.releaseAt === event.releaseAt && currencyOf(e) === "USD" && e.actual && !doneThisTick.has(e.id)
+          && dueStage(e, Date.now(), calendarLedger!.get(e.id), destinations.map((item) => item.chatId)) === "ACTUAL")
+          .sort((a, b) => (a.impact === "high" ? 0 : 1) - (b.impact === "high" ? 0 : 1));
+        const items = group.map((e) => ({ event: e, saved: calendarLedger!.get(e.id) }));
+        try {
+          const upcoming = calendarEvents.filter((e) => currencyOf(e) === "USD" && (e.impact === "high" || e.impact === "medium") && Date.parse(e.releaseAt) > Date.now() && Date.parse(e.releaseAt) - Date.now() < 3 * 86400_000)
+            .slice(0, 8).map((e) => `${formatWib(e.releaseAt)} ${e.name} (perkiraan ${e.consensus ?? "n/a"}, sebelumnya ${e.prior ?? "n/a"})`).join("; ");
+          const context = `${goldLinkNote("USD")}\n${brain ? await brain.calendarContext(event, "ACTUAL") : snapshot}`;
+          const dive = await Promise.race([
+            briefingEditor.calendarDeepDive({ releaseWib: formatWib(event.releaseAt), prints: items.map((i) => printFacts(i.event, i.saved)), context, nextEvents: upcoming ? `AGENDA BERIKUTNYA: ${upcoming}` : "AGENDA BERIKUTNYA: (kosong)" }),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 90_000))
+          ]);
+          const text = dive ? Object.values(dive).join(" ") : "";
+          if (dive && Object.values(dive).every((v) => v.length > 40) && !/https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(text)) {
+            const message = formatCalendarDeep(items, dive);
+            const targets = destinations.filter((d) => !items.every((i) => i.saved.actualTo?.[d.chatId]));
+            const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, targets, message, store);
+            for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
+            if (Object.keys(accepted).length) {
+              for (const i of items) { calendarLedger.mark(i.event.id, "ACTUAL", accepted); doneThisTick.add(i.event.id); postedReleases.push({ at: Date.now(), name: i.event.name, actual: i.event.actual! }); }
+              postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); recentSendTimes.push(Date.now());
+            }
+            log.info({ events: items.map((i) => i.event.name), accepted: Object.keys(accepted).length, chars: message.length }, "Calendar US deep analysis processed");
+            continue;
+          }
+          log.warn({ event: event.name }, "US deep analysis incomplete; falling back to the short result");
+        } catch (error) { log.warn({ err: error, event: event.name }, "US deep analysis failed; falling back to the short result"); }
+      }
+      // Sol writes the warning/result in the owner's voice with the playbook chain; the fixed template is the fallback.
+      let explanation = calendarNarrative(event, stage, snapshot, existing), analysed = false;
+      try {
+        const context = `MATA UANG: ${currency}. ${goldLinkNote(currency)}\n${brain ? await brain.calendarContext(event, stage) : snapshot}`;
+        const consensus = (existing.firstSeenForecast !== undefined ? existing.firstSeenForecast : event.consensus) ?? null;
+        const written = await Promise.race([
+          briefingEditor.calendarText({ stage, name: event.name, country: currency, releaseWib: formatWib(event.releaseAt), actual: event.actual, consensus, prior: (existing.firstSeenPrior !== undefined ? existing.firstSeenPrior : event.prior) ?? null, context }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000))
+        ]);
+        if (written && written.meaning && written.narrative && !/https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(`${written.meaning} ${written.narrative}`)) { explanation = written; analysed = true; }
+      } catch (error) { log.warn({ err: error, event: event.name }, "Calendar AI text failed; using template"); }
+      const message = formatCalendarMessage(event, stage, explanation, existing, analysed);
       const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, pending, message, store);
       for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
-      if (Object.keys(accepted).length) { calendarLedger.mark(event.id, stage, accepted); recentSendTimes.push(Date.now()); }
+      if (Object.keys(accepted).length) { calendarLedger.mark(event.id, stage, accepted); recentSendTimes.push(Date.now()); if (stage === "ACTUAL" && event.actual) { postedReleases.push({ at: Date.now(), name: event.name, actual: event.actual }); postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); } }
       log.info({ event: event.name, stage, accepted: Object.keys(accepted).length }, "Calendar alert processed");
     }
   } finally { calendarTicking = false; }
@@ -323,6 +372,7 @@ async function tick(): Promise<void> {
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
             onSent: recordPrediction,
             important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
+            releaseEcho: (item) => calendarEcho(`${item.title} ${item.summary}`, postedReleases, Date.now()),
             critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
             sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
               .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
@@ -352,21 +402,22 @@ async function tick(): Promise<void> {
 async function briefingTick(): Promise<void> {
   if (!config.BRIEFING_ENABLED || briefingBusy) return;
   const now = new Date();
-  const kind: BriefingKind | null = dueBriefing(now, config.BRIEFING_MORNING_WIB, config.BRIEFING_EVENING_WIB, briefings.sent());
+  const schedule = { asiaWib: config.BRIEFING_MORNING_WIB, europeLondon: config.BRIEFING_EUROPE_LONDON, usNewYork: config.BRIEFING_US_NEWYORK };
+  const kind: BriefingKind | null = dueBriefing(now, schedule, briefings.sent());
   if (!kind) return;
   briefingBusy = true;
   const j = jakarta(now);
   try {
-    // Recap = everything shared in the last 24 hours (Monday morning: since Friday's session, the weekend is closed).
-    const hours = kind === "PAGI" && j.weekday === 1 ? 62 : 24;
-    const since = now.getTime() - hours * 3600_000;
+    // Recap = everything shared since the previous session's briefing (Asia on Monday: since Friday's US session).
+    const since = Math.min(recapSince(kind, now, schedule), now.getTime() - 3 * 3600_000);
+    const hours = Math.max(1, Math.round((now.getTime() - since) / 3600_000));
     const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since)
       .sort((a, b) => a.sentAt!.localeCompare(b.sentAt!)).slice(-60)
       .map((r) => ({ at: r.sentAt!, theme: r.event.storyKey, title: r.article.title.replace(/\s+/g, " ").slice(0, 160) }));
     const market = [await marketSnapshot().catch(() => ""), brain ? regimeBrief(brain.regime.current()) : "", brain ? brain.macroBrief() : ""].filter(Boolean).join(" | ");
     const visuals = config.BRIEFING_CHARTS_ENABLED ? await briefingVisuals(kind, since) : { stats: "", images: [] };
-    const input = { kind, nowWib: j.label, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
-      upcoming: upcomingEvents(calendarEvents, now, 24).map((e) => ({ ...e, history: brain?.calendarInsight(e.name) || undefined })), released: releasedEvents(calendarEvents, now, hours) };
+    const input = { kind, nowWib: j.label, recapHours: hours, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
+      upcoming: upcomingEvents(calendarEvents, now, SESSION[kind].upcomingHours).map((e) => ({ ...e, history: brain?.calendarInsight(e.name) || undefined })), released: releasedEvents(calendarEvents, now, hours) };
     let checked: ReturnType<typeof validateBriefing> = { ok: false, reason: "not generated" };
     for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input)));
     // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.

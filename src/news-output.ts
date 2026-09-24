@@ -54,7 +54,27 @@ export function hedgeScore(message: string): { hedges: number; takesSide: boolea
   const blocks = message.trim().split(/\n\s*\n/).map((b) => plain(b));
   const body = blocks.slice(1).join(" ").toLowerCase();
   const gold = (blocks[2] ?? "").toLowerCase();
-  const hedges = (body.match(/berpotensi|bisa jadi|mungkin|belum jelas|perlu dipantau|patut dicermati|tergantung|bergantung|dua arah|belum tentu|masih dilihat|sulit ditebak|belum pasti|bisa saja|tidak menutup kemungkinan/g) ?? []).length;
+  const hedges = (body.match(/berpotensi|bisa jadi|mungkin|belum jelas|perlu dipantau|patut dicermati|tergantung|bergantung|dua arah|belum tentu|masih dilihat|sulit ditebak|belum pasti|bisa saja|tidak menutup kemungkinan|belum otomatis|ketarik dua|dua arus|tabrakan/g) ?? []).length;
+  // Opening the gold paragraph with "direction unclear" is timid by definition.
+  const firstSentence = gold.split(/(?<=[.!?])\s/)[0] ?? "";
+  const timidOpening = /belum jelas|dua arah|ketarik dua|dua arus|tabrakan|belum otomatis|belum pasti|campuran/.test(firstSentence);
   const takesSide = /ketekan|tertekan|nekan|menekan|kebantu|terbantu|nopang|menopang|ketahan|tertahan|condong|bearish|bullish|naik|turun|menguat|melemah|susah napas|dapet angin|kebawa/.test(gold);
-  return { hedges, takesSide, timid: hedges >= 3 || (!takesSide && hedges >= 1) };
+  return { hedges, takesSide, timid: timidOpening || hedges >= 3 || (!takesSide && hedges >= 1) };
+}
+
+/**
+ * Chat shorthand is hard to read for members: expand it to full words while keeping
+ * the casual gw/lo tone. Applied by code to every group message, so it always holds.
+ */
+const SHORT: Array<[RegExp, string]> = [
+  [/\byg\b/gi, "yang"], [/\btp\b/gi, "tapi"], [/\bjg\b/gi, "juga"], [/\bbs\b/gi, "bisa"], [/\bklo\b/gi, "kalau"], [/\bkl\b/gi, "kalau"],
+  [/\bgk\b/gi, "gak"], [/\bga\b/gi, "gak"], [/\bblm\b/gi, "belum"], [/\bbelom\b/gi, "belum"], [/\blg\b/gi, "lagi"], [/\budh\b/gi, "udah"],
+  [/\bdgn\b/gi, "dengan"], [/\bkrn\b/gi, "karena"], [/\bsm\b/gi, "sama"], [/\bbgt\b/gi, "banget"], [/\btdk\b/gi, "tidak"], [/\butk\b/gi, "untuk"],
+  [/\bdr\b/gi, "dari"], [/\bspt\b/gi, "seperti"], [/\bjd\b/gi, "jadi"], [/\bkmrn\b/gi, "kemarin"], [/\bkemaren\b/gi, "kemarin"], [/\bsdh\b/gi, "sudah"],
+  [/\bmrk\b/gi, "mereka"], [/\bnyari\b/gi, "nyari"], [/\bbnyk\b/gi, "banyak"], [/\bsampe\b/gi, "sampai"], [/\bgara2\b/gi, "gara-gara"]
+];
+export function readable(text: string): string {
+  let out = text;
+  for (const [re, word] of SHORT) out = out.replace(re, (m) => m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase() ? word[0].toUpperCase() + word.slice(1) : word);
+  return out;
 }

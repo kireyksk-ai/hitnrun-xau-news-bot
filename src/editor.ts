@@ -5,6 +5,8 @@ import type { EventAssessment, StoryState } from "./event-intelligence.js";
 import { SEQUENCE_REASONING_GUIDE } from "./sequence-context.js";
 import { REJECTED_OUTCOME_GUIDE } from "./shadow-outcomes.js";
 import { EXPERIENCE_GUIDE } from "./brain-retrieval.js";
+import { readable } from "./news-output.js";
+import type { DeepDive } from "./economic-calendar.js";
 import { MACRO_GUIDE } from "./brain-macro.js";
 import type { CriticResult, InternalAssessment } from "./brain-episodes.js";
 
@@ -87,7 +89,7 @@ export const MATERIALITY_CALIBRATION_GUIDE = `MATERIALITY CALIBRATION (learned f
 - OECD or IMF revisions that include an explicit Fed or ECB rate-path call are material policy forecasts.
 When a Tier 1 or Tier 2 item falls in these cases and the direction for gold is unclear, publish it with a two-way conclusion instead of rejecting it.`;
 
-export const HITNRUN_VOICE_GUIDE = `HITNRUN VOICE ("Bahasa Gw") — write judul, ringkasan and dampakEmas exactly in the owner's voice:
+export const HITNRUN_VOICE_GUIDE = readable(`HITNRUN VOICE ("Bahasa Gw") — write judul, ringkasan and dampakEmas exactly in the owner's voice:
 Jangan menulis seperti wartawan. Jangan menulis seperti analis bank. Jangan mempercantik bahasa gw. Ambil fakta yang rumit, pikirkan dalam, lalu jelaskan pake bahasa trader sehari2 seolah gw sendiri yang lagi ngomong di grup. Rapihin pikiran gw, jangan ganti karakter gw.
 - Bahasa Indonesia sehari-hari Jakarta. Kata ganti: gw, lo, kita. Never saya, Anda, saudara, para investor.
 - Natural spelling: gak/gk, klo, udah, belom/blm, pake, tau, abis, bener, gimana, bakal, ujungnya, doang, malah, ngerem, ngejar, nyapu, jeblok, anteng. Short forms yg, tp, jg, lg, bs, dah when natural; never so many that it is hard to read.
@@ -101,7 +103,8 @@ Owner's real phrasing to match the rhythm (style reference only, not content): "
 Example (formal -> gw): "Kenaikan PMI menunjukkan ketahanan perekonomian Amerika Serikat yang berpotensi mendorong Federal Reserve mempertahankan kebijakan moneter restriktif." -> "PMI malah makin kenceng. Jadi masalah buat emas bukan PMI-nya doang. Ekonomi AS masih kuat saat inflasi belum beres. Fed mau buru2 lunak buat apa? Selama cerita ini bertahan, yield sama dolar masih punya bensin."
 Example alert body: "Barr barusan ngomong kenaikan kemaren blm cukup. Inflasi masih bandel, pasar kerja jg udah gk jadi alasan buat nahan, jadi pintu naik lg masih kebuka lebar." / "Intinya ini bukan cuma soal Barr. Abis PMI 58 kemaren arahnya emang udah keliatan kesini, makanya yield sama DXY naik bareng dan gold ketekan dari dua sisi. Buyer gold ada kok tp lg dipaksa ngelawan arus. Selama Fed masih kompak hawkish kayak gini jangan heran klo gold susah napas."
 CAUSE-EFFECT IS MANDATORY: dampakEmas must be a chain, not a verdict: fakta baru → saluran yang kena (dolar, yield/ekspektasi Fed, minyak→inflasi, risk-on/off, pembelian bank sentral) → apa artinya buat emas, and say which link is dominant right now and what would break it. Never repeat a fact already sent (see SEQUENCE_CONTEXT): if the item adds nothing new, material=false; if it adds something, say only what is new and how it changes the chain.
-BERANI AMBIL SIKAP (conviction): tulis kayak trader yang udah punya pandangan, bukan komentator yang cari aman. Kesimpulan dulu di kalimat pertama dampakEmas (emas condong ketekan / kebantu / ketahan, dan kenapa), baru rantai alasannya, baru satu kalimat risiko yang bisa ngebalik. Kalau bukti condong ke satu arah, bilang terus terang condongnya ke mana dan set potensiArah BULLISH/BEARISH, walau belum 100%. Pakai TWO_WAY atau UNCLEAR hanya kalau dua saluran benar-benar seimbang, dan saat itu sebut saluran mana yang bakal menang kalau X terjadi. Jangan numpuk kata ragu ("berpotensi", "bisa jadi", "mungkin", "belum jelas", "perlu dipantau", "tergantung") — maksimal satu. Berani ≠ ngarang: tetap tanpa zona/level/entry/"pasti"/"dijamin", dan tetap pakai fakta yang ada.`;
+BERANI AMBIL SIKAP (conviction): tulis kayak trader yang udah punya pandangan, bukan komentator yang cari aman. Kesimpulan dulu di kalimat pertama dampakEmas (emas condong ketekan / kebantu / ketahan, dan kenapa), baru rantai alasannya, baru satu kalimat risiko yang bisa ngebalik. Kalau bukti condong ke satu arah, bilang terus terang condongnya ke mana dan set potensiArah BULLISH/BEARISH, walau belum 100%. Pakai TWO_WAY atau UNCLEAR hanya kalau dua saluran benar-benar seimbang, dan saat itu sebut saluran mana yang bakal menang kalau X terjadi. Jangan numpuk kata ragu ("berpotensi", "bisa jadi", "mungkin", "belum jelas", "perlu dipantau", "tergantung") — maksimal satu. Berani ≠ ngarang: tetap tanpa zona/level/entry/"pasti"/"dijamin", dan tetap pakai fakta yang ada. JANGAN buka dampakEmas dengan "arah emas belum jelas", "emas ketarik dua arah" atau "jalurnya tabrakan": kalau memang ada dua kekuatan, kalimat pertama tetap bilang mana yang lagi menang sekarang ("emas condong ketahan karena buyer masih kuat walau yield naik"), baru jelasin lawannya.
+`) + `MUDAH DIBACA: tetap santai pakai gw/lo/kita, tapi tulis kata lengkap — "yang, tapi, juga, bisa, kalau, belum, lagi, sudah/udah, dengan, karena" — jangan singkatan chat (yg, tp, jg, bs, klo, blm, lg, dgn, krn). Kalimat pendek, satu ide per kalimat, huruf kapital di awal kalimat dan nama (Fed, DXY, Iran).`;
 
 export const CATALYST_REASONING_GUIDE = `ADDITIONAL CATALYST REASONING MEMORY (reasoning aids, never automatic alerts or live facts):
 For each genuinely new candidate, identify the originating action or data, event time, prior expectation, and the specific path to XAU. Consider monetary policy, inflation and labor surprises, DXY and real yields, sovereign debt and funding stress, geopolitics, central-bank reserve demand, ETF/COMEX and physical-market flows, and major trade/energy changes. A headline without the word gold can still matter; a gold-price headline can still be only a recap. Do not treat any category weight, named official's historical bias, or publication's reputation as a verdict.
@@ -155,7 +158,8 @@ export function goldCallLine(call: GoldCall): string {
   return `Potensi arah emas: belum jelas`;
 }
 
-function buildTelegramMessage(f: FormattableFields, call?: GoldCall): string {
+function buildTelegramMessage(raw: FormattableFields, call?: GoldCall): string {
+  const f = { judul: readable(raw.judul), ringkasan: readable(raw.ringkasan), dampakEmas: readable(raw.dampakEmas) };
   return [
     `<b>⚠️ ${escapeHtml(f.judul)}</b>`,
     escapeHtml(f.ringkasan),
@@ -297,6 +301,43 @@ export class Editor {
     });
     const out = JSON.parse(response.output_text) as { direction: InternalAssessment["direction"]; confidence: number; action: InternalAssessment["action"] };
     return { ...out, confidence: Math.max(50, Math.min(90, out.confidence)) };
+  }
+
+  /** Pre-release warning or post-release result for a scheduled event, in the owner's voice. */
+  async calendarText(input: { stage: "WARNING" | "ACTUAL"; name: string; country: string; releaseWib: string; actual: string | null; consensus: string | null; prior: string | null; context: string }): Promise<{ meaning: string; narrative: string }> {
+    const schema = { type: "object", additionalProperties: false, properties: { meaning: { type: "string" }, narrative: { type: "string" } }, required: ["meaning", "narrative"] };
+    const task = input.stage === "WARNING"
+      ? "SEBELUM RILIS. meaning: 1-2 kalimat kenapa data ini penting buat emas sekarang (pakai rezim & rantai playbook). narrative: skenario jelas — kalau angka DI ATAS perkiraan emas condong ke mana dan kenapa (rantai sebab-akibat), kalau DI BAWAH perkiraan condong ke mana; sebut kebiasaan historis kalau ada. Maksimal 90 kata total."
+      : "SETELAH RILIS. meaning: 1-2 kalimat: angkanya beat/miss/sesuai berapa dibanding perkiraan dan artinya. narrative: ambil sikap — emas condong ke mana sekarang, lewat rantai apa, dan apakah REAKSI SEJAK RILIS mengonfirmasi atau melawan; satu kalimat apa yang bisa ngebalik. Maksimal 110 kata total.";
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", name: "calendar_text", strict: true, schema } } as never,
+      input: [{ role: "developer", content: `Lo nulis analisa rilis kalender ekonomi buat grup Telegram emas. ${task} Kalau MATA UANG bukan USD: jelasin dulu yang pertama kena adalah mata uang itu (dan bank sentralnya), lalu jujur seberapa kecil/besar jalurnya ke emas sesuai catatan MATA UANG — jangan pakai rantai Fed/dolar AS seolah ini data AS. Pakai hanya angka yang diberikan; jangan ngarang konsensus atau reaksi. Tanpa zona, level harga, entry, target, stop-loss, perintah beli/jual, tanpa "pasti"/"dijamin", tanpa link atau nama sumber.\n\n${HITNRUN_VOICE_GUIDE}` }, { role: "user", content: JSON.stringify(input) }]
+    });
+    const out = JSON.parse(response.output_text) as { meaning: string; narrative: string };
+    return { meaning: readable(out.meaning.trim()), narrative: readable(out.narrative.trim()) };
+  }
+
+  /** Institutional-grade note after a US release (one per release time), seven sections. */
+  async calendarDeepDive(input: { releaseWib: string; prints: unknown[]; context: string; nextEvents: string }): Promise<DeepDive> {
+    const keys = ["angka", "kualitas", "fed", "transmisi", "emas", "risiko", "berikutnya"] as const;
+    const schema = { type: "object", additionalProperties: false, properties: Object.fromEntries(keys.map((k) => [k, { type: "string" }])), required: [...keys] };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "medium" },
+      text: { format: { type: "json_schema", name: "calendar_deep_dive", strict: true, schema } } as never,
+      input: [{ role: "developer", content: `Lo analis makro senior di desk emas. Data AS baru rilis. Tulis catatan pasca-rilis KELAS INSTITUSI (setara catatan riset bank/hedge fund) untuk member grup Telegram, dalam Bahasa Indonesia yang rapi dan lengkap: kalimat utuh, istilah pasar yang tepat (surprise, repricing, front-end, real yield, breakeven, kurva 2s10s, dot plot, pricing FedWatch), angka spesifik dari data yang diberikan. Boleh pakai "kita". Jangan singkatan chat. Setiap bagian wajib berisi sebab-akibat, bukan daftar fakta.
+Isi tiap bagian:
+- angka (50-80 kata): besar kejutan tiap angka dibanding perkiraan dan dibanding bulan lalu, arah tren, revisi data sebelumnya kalau ada, dan seberapa besar kejutan ini dibanding kebiasaan historisnya kalau datanya ada.
+- kualitas (50-80 kata): apa yang sebenarnya diukur data ini, komponen mana yang penting (misalnya inti vs utama, upah, partisipasi, jasa vs barang) sejauh bisa disimpulkan dari angka yang ada, dan apakah kualitas angkanya kuat atau rapuh. Jangan mengarang rincian komponen yang tidak diberikan; kalau rinciannya tidak ada, jelaskan apa yang perlu dicek.
+- fed (60-90 kata): bagaimana ini menggeser ekspektasi jalur suku bunga Fed (pakai data fed funds/2Y di konteks), apakah memperkuat atau melemahkan narasi Fed saat ini, dan apa artinya untuk rapat berikutnya.
+- transmisi (50-80 kata): reaksi dolar, yield 2Y/10Y, kurva, saham, VIX sejak rilis (pakai REAKSI SEJAK RILIS persis), dan apakah reaksinya konsisten dengan kejutannya.
+- emas (70-100 kata): ambil sikap tegas: emas condong tertekan/tertopang/tertahan, lewat rantai apa (yield riil, dolar, safe haven, rezim bank sentral), apakah reaksi harga mengonfirmasi, dan seberapa kuat keyakinannya.
+- risiko (30-60 kata): skenario yang bisa membalik pandangan ini (reaksi awal yang sering berbalik, revisi, data lanjutan, positioning).
+- berikutnya (20-50 kata): data/acara lanjutan yang relevan HANYA dari daftar AGENDA BERIKUTNYA; kalau kosong, sebut apa yang perlu dikonfirmasi dari pasar.
+Pakai hanya angka yang diberikan; jangan mengarang konsensus, komponen, atau reaksi. Tanpa zona, level harga, entry, target, stop-loss, perintah beli/jual, tanpa "pasti"/"dijamin", tanpa link atau nama sumber.` }, { role: "user", content: JSON.stringify(input) }]
+    });
+    const out = JSON.parse(response.output_text) as DeepDive;
+    return Object.fromEntries(keys.map((k) => [k, readable(String(out[k] ?? "").trim())])) as DeepDive;
   }
 
   /** Scheduled desk briefing (morning / 21:00 WIB). Plain Telegram HTML text, validated by the caller. */

@@ -11,7 +11,7 @@ export type Delivery = { warnedTo?: Record<string, number>; actualTo?: Record<st
 
 const text = (value: unknown): string | null => typeof value === "string" && value.trim() && value.trim() !== "-" ? value.trim() : null;
 const escapeHtml = (value: string): string => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const source = '<a href="https://www.financecalendar.com">Sumber kalender: Finance Calendar</a>';
+// The owner does not want the calendar source shown in the groups.
 
 export function parseCalendarEvents(raw: unknown): CalendarEvent[] {
   if (!raw || typeof raw !== "object" || !Array.isArray((raw as { events?: unknown }).events)) throw new Error("Invalid economic calendar response");
@@ -93,17 +93,69 @@ export function calendarNarrative(event: CalendarEvent, stage: "WARNING" | "ACTU
   return { meaning: `Hasil ${event.name} telah terbit. ${comparison}`, narrative: `${channel}${context}` };
 }
 
-export function formatCalendarMessage(event: CalendarEvent, stage: "WARNING" | "ACTUAL", explanation: { meaning: string; narrative: string }, saved: Delivery = {}): string {
-  const label = escapeHtml(event.name);
+export function formatCalendarMessage(event: CalendarEvent, stage: "WARNING" | "ACTUAL", explanation: { meaning: string; narrative: string }, saved: Delivery = {}, analysed = false): string {
+  const label = `${escapeHtml(event.name)}${currencyOf(event) !== "USD" ? ` (${currencyOf(event)})` : ""}`;
   const stats = stage === "WARNING"
     ? `Forecast: ${escapeHtml(event.consensus ?? "belum tersedia")} | Sebelumnya: ${escapeHtml(event.prior ?? "belum tersedia")}`
     : `Actual: ${escapeHtml(event.actual ?? "belum tersedia")} | Forecast: ${escapeHtml((saved.firstSeenForecast !== undefined ? saved.firstSeenForecast : event.consensus) ?? "belum tersedia")} | Sebelumnya: ${escapeHtml((saved.firstSeenPrior !== undefined ? saved.firstSeenPrior : event.prior) ?? "belum tersedia")}`;
-  const header = stage === "WARNING" ? "🚨 WARNING — U READY4 NEWSSSSS 🚨" : `📰 HASIL BERITA KALENDER${event.impact === "high" ? " ⭐⭐⭐" : ""}`;
-  const caution = stage === "WARNING"
+  // The alarm header is reserved for 3-star USD releases; everything else gets a calm header with its currency.
+  const cur = currencyOf(event);
+  const usdHigh = cur === "USD" && event.impact === "high";
+  const stars = event.impact === "high" ? "⭐⭐⭐" : "⭐⭐";
+  const where = countryTag(cur, event.country);
+  // Country is always named right under/inside the header so members know at a glance whose data it is.
+  const header = stage === "WARNING" ? (usdHigh ? `🚨 WARNING — U READY4 NEWSSSSS 🚨\n${where} — ${stars}` : `📅 RILIS ${where} — ${stars}`)
+    : `📰 HASIL ${where}${event.impact === "high" ? " ⭐⭐⭐" : ""}`;
+  const caution = stage === "WARNING" && !(currencyOf(event) === "USD" && event.impact === "high") ? ""
+    : stage === "WARNING"
     ? "⚠️ PERSIAPAN: CLEAR POSISI UNTUK HINDARI RISIKO. Jangan judi menebak hasil rilis. Setelah angka keluar, lihat reaksi candle 15 menit pertama untuk mencari arah mata angin—gerakan pertama belum tentu arah yang bertahan."
-    : "Reaksi awal pasar bisa berubah; arah emas belum terkonfirmasi hanya dari angka rilis.";
+    : analysed ? "" : "Reaksi awal pasar bisa berubah; arah emas belum terkonfirmasi hanya dari angka rilis.";
   return [`<b>${header}</b>`, `<b>${label}</b> — ${formatWib(event.releaseAt)}`, stats,
-    escapeHtml(explanation.meaning), escapeHtml(explanation.narrative), caution, source].join("\n\n");
+    escapeHtml(explanation.meaning), escapeHtml(explanation.narrative), caution].filter(Boolean).join("\n\n");
+}
+
+/** Institutional post-release note for US data: one message per release time, seven sections. */
+export type DeepDive = { angka: string; kualitas: string; fed: string; transmisi: string; emas: string; risiko: string; berikutnya: string };
+const numOf = (v: string | null | undefined): number | null => { if (!v) return null; const m = v.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/); return m ? Number(m[0]) : null; };
+/** The numbers a desk reads first: actual vs the forecast seen before release, prior, and any revision of the prior. */
+export function printFacts(event: CalendarEvent, saved: Delivery = {}): { name: string; actual: string | null; consensus: string | null; prior: string | null; revisedPrior: string | null; versus: "DI ATAS" | "DI BAWAH" | "SESUAI" | "N/A"; surprise: number | null } {
+  const consensus = (saved.firstSeenForecast !== undefined ? saved.firstSeenForecast : event.consensus) ?? null;
+  const prior = (saved.firstSeenPrior !== undefined ? saved.firstSeenPrior : event.prior) ?? null;
+  const a = numOf(event.actual), c = numOf(consensus);
+  const surprise = a !== null && c !== null ? +(a - c).toFixed(4) : null;
+  const versus = surprise === null ? "N/A" : surprise > 0 ? "DI ATAS" : surprise < 0 ? "DI BAWAH" : "SESUAI";
+  const revisedPrior = event.prior && prior && event.prior !== prior ? event.prior : null;
+  return { name: event.name, actual: event.actual, consensus, prior, revisedPrior, versus, surprise };
+}
+const VERSUS_TEXT = { "DI ATAS": "di atas perkiraan", "DI BAWAH": "di bawah perkiraan", SESUAI: "sesuai perkiraan", "N/A": "" } as const;
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return end > max * 0.5 ? cut.slice(0, end + 1) : `${cut.trimEnd()}…`;
+}
+export function formatCalendarDeep(items: Array<{ event: CalendarEvent; saved: Delivery }>, dive: DeepDive): string {
+  const main = items[0].event;
+  const high = items.some((i) => i.event.impact === "high");
+  const prints = items.map(({ event, saved }) => {
+    const f = printFacts(event, saved);
+    const vs = VERSUS_TEXT[f.versus] ? ` → <b>${VERSUS_TEXT[f.versus]}</b>` : "";
+    const rev = f.revisedPrior ? ` · data sebelumnya direvisi ${escapeHtml(f.prior ?? "")} → ${escapeHtml(f.revisedPrior)}` : "";
+    return `• ${escapeHtml(f.name)}: <b>${escapeHtml(f.actual ?? "n/a")}</b> vs perkiraan ${escapeHtml(f.consensus ?? "n/a")} (sebelumnya ${escapeHtml(f.prior ?? "n/a")})${vs}${rev}`;
+  }).join("\n");
+  const sections: Array<[string, string]> = [
+    ["📊 Angka vs ekspektasi", dive.angka], ["🔍 Kualitas dan detail data", dive.kualitas], ["🏦 Implikasi untuk The Fed", dive.fed],
+    ["💵 Transmisi ke dolar dan yield", dive.transmisi], ["🥇 Dampak ke emas", dive.emas], ["⚠️ Yang bisa membalik", dive.risiko], ["📅 Yang dipantau berikutnya", dive.berikutnya]
+  ];
+  const head = [`<b>📰 HASIL ${countryTag("USD")}${high ? " ⭐⭐⭐" : ""}</b>`, `<b>Analisa lengkap rilis ${formatWib(main.releaseAt)}</b>`, prints];
+  // Telegram caps a message at 4096 characters: shrink the longest sections first, never drop one.
+  let budget = 3900 - head.join("\n\n").length - sections.reduce((n, [t]) => n + t.length + 12, 0);
+  const texts = sections.map(([, body]) => escapeHtml(body.trim()));
+  while (texts.reduce((n, t) => n + t.length, 0) > budget && budget > 0) {
+    const i = texts.reduce((best, t, j) => t.length > texts[best].length ? j : best, 0);
+    texts[i] = clip(texts[i], Math.floor(texts[i].length * 0.85));
+  }
+  return [...head, ...sections.map(([title], i) => `<b>${title}</b>\n${texts[i]}`)].join("\n\n");
 }
 
 export class CalendarLedger {
@@ -138,4 +190,43 @@ export class CalendarLedger {
     this.save();
   }
   private save(): void { const temp = `${this.path}.tmp`; writeFileSync(temp, JSON.stringify(this.data), "utf8"); renameSync(temp, this.path); }
+}
+
+/** Currency a release belongs to: country field first, then the name/URL (the feed often leaves country empty). */
+const COUNTRY_TAG: Record<string, string> = { USD: "🇺🇸 AMERIKA SERIKAT (USD)", EUR: "🇪🇺 ZONA EURO (EUR)", GBP: "🇬🇧 INGGRIS (GBP)", JPY: "🇯🇵 JEPANG (JPY)",
+  CNY: "🇨🇳 CHINA (CNY)", AUD: "🇦🇺 AUSTRALIA (AUD)", CAD: "🇨🇦 KANADA (CAD)", NZD: "🇳🇿 SELANDIA BARU (NZD)", CHF: "🇨🇭 SWISS (CHF)" };
+/** Flag + country + currency, e.g. "🇦🇺 AUSTRALIA (AUD)". */
+export function countryTag(currency: string, country = ""): string {
+  return COUNTRY_TAG[currency] ?? `🌐 ${escapeHtml((country || "GLOBAL").toUpperCase())}`;
+}
+
+export function currencyOf(e: Pick<CalendarEvent, "country" | "name" | "url">): string {
+  const c = (e.country || "").toUpperCase();
+  const byCountry: Record<string, string> = { US: "USD", USA: "USD", EU: "EUR", EZ: "EUR", EMU: "EUR", DE: "EUR", FR: "EUR", IT: "EUR", ES: "EUR", GB: "GBP", UK: "GBP", JP: "JPY", CN: "CNY", AU: "AUD", CA: "CAD", NZ: "NZD", CH: "CHF" };
+  if (byCountry[c]) return byCountry[c];
+  // The name decides first; the URL slug is only a fallback.
+  const rules: Array<[RegExp, string]> = [
+    [/australia|\brba\b/, "AUD"], [/new zealand|\brbnz\b/, "NZD"], [/canada|\bboc\b/, "CAD"], [/japan|\bboj\b|tokyo/, "JPY"], [/china|\bpboc\b|caixin/, "CNY"],
+    [/united kingdom|\buk\b|britain|\bboe\b|bank of england/, "GBP"], [/switzerland|\bsnb\b/, "CHF"],
+    [/euro|germany|german|france|french|italy|spain|\becb\b|\bifo\b|\bzew\b/, "EUR"],
+    [/united states|united-states|\bus\b|\bu\.s\.|\bfed\b|fomc|nonfarm|non-farm|jobless|ism |michigan|jolts|pce|durable goods|new home sales|existing home|philly|empire state|treasury|adp/, "USD"]
+  ];
+  for (const text of [e.name.toLowerCase(), (e.url || "").toLowerCase().replace(/[-_/]/g, " ")]) for (const [re, cur] of rules) if (re.test(text)) return cur;
+  return "OTHER";
+}
+/** How much a currency's own release can reach gold (XAUUSD). */
+export function goldLinkNote(currency: string): string {
+  const notes: Record<string, string> = {
+    USD: "Data AS: langsung nyetir dolar, yield dan ekspektasi Fed, jadi dampaknya ke emas paling besar.",
+    EUR: "Data zona euro: yang pertama kena EUR. EUR itu sekitar 58% dari DXY, jadi kejutan besar bisa geser dolar lalu emas (EUR menguat → DXY turun → emas kebantu). Dampak ke emas sedang.",
+    JPY: "Data Jepang/BoJ: yang pertama kena JPY. Yen juga safe haven dan sekitar 14% dari DXY; kejutan BoJ bisa geser DXY dan selera risiko. Dampak ke emas sedang.",
+    GBP: "Data Inggris/BoE: yang pertama kena GBP, sekitar 12% dari DXY. Dampak ke emas kecil sampai sedang.",
+    CNY: "Data China/PBoC: jalurnya ke emas lewat permintaan fisik, pembelian emas PBoC dan selera risiko Asia, bukan lewat dolar.",
+    AUD: "Data Australia: yang pertama kena AUD. AUD gak masuk hitungan DXY, jadi emas dunia (XAUUSD) hampir gak kegeser; yang kerasa harga emas dalam AUD (XAUAUD). Emas baru ikut kalau datanya ekstrem sampai ngubah selera risiko Asia.",
+    CAD: "Data Kanada: yang pertama kena CAD (sekitar 9% DXY) dan terkait minyak. Dampak ke emas kecil.",
+    NZD: "Data Selandia Baru: yang kena NZD, gak masuk DXY. Dampak ke emas kecil.",
+    CHF: "Data Swiss/SNB: yang kena CHF, juga safe haven. Dampak ke emas kecil.",
+    OTHER: "Bukan data AS: dampak ke emas biasanya kecil kecuali datanya ekstrem."
+  };
+  return notes[currency] ?? notes.OTHER;
 }
