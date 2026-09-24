@@ -6,6 +6,7 @@ import { complete } from "./delayed-outcomes.js";
 import { evaluateCurrentFairValue, runLearningLoop } from "./learning-loop.js";
 import { learnExperience } from "./calibration.js";
 import { learnReputation } from "./reputation-learning.js";
+import { gated } from "./yahoo.js";
 
 const universe = [
   ["XAUUSD", "GC=F"], ["DXY", "DX-Y.NYB"], ["EURUSD", "EURUSD=X"], ["USDJPY", "JPY=X"], ["GBPUSD", "GBPUSD=X"], ["GBPJPY", "GBPJPY=X"],
@@ -17,7 +18,7 @@ type Observation = { price: number; changePercent: number; fresh: boolean; sourc
 
 async function one(label: string, symbol: string): Promise<[string, Observation] | null> {
   try {
-    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m`, { signal: AbortSignal.timeout(8_000), headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" } });
+    const r = await gated(fetch)(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m`, { signal: AbortSignal.timeout(8_000), headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" } });
     const result = (await r.json() as YahooChart).chart?.result?.[0]; const meta = result?.meta;
     if (!r.ok || !meta?.regularMarketPrice || !meta.chartPreviousClose) return null;
     const fresh = !meta.regularMarketTime || Date.now() - meta.regularMarketTime * 1_000 < 20 * 60_000;

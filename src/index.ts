@@ -39,6 +39,7 @@ import { Backtest } from "./brain-backtest.js";
 import { ActualCapture, type Captured } from "./calendar-actuals.js";
 import { sourceTier } from "./event-intelligence.js";
 import { calendarEcho, type PostedRelease } from "./pipeline.js";
+import { gated } from "./yahoo.js";
 
 const log = pino({ level: config.LOG_LEVEL });
 const providers: NewsProvider[] = [
@@ -114,7 +115,7 @@ async function rememberOutcome(result: import("./intelligence-store.js").ReviewR
 /** XAU reference price for scoring (COMEX gold futures via Yahoo; returns are what matter). */
 async function xauPrice(): Promise<number | undefined> {
   try {
-    const response = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?range=1d&interval=1m",
+    const response = await gated(fetch)("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?range=1d&interval=1m",
       { headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" }, signal: AbortSignal.timeout(8_000) });
     if (!response.ok) return undefined;
     const body = await response.json() as { chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }> } };
@@ -231,7 +232,7 @@ async function calendarTick(): Promise<void> {
         calendarLedger.prune(Date.now());
         const missingActual = calendarEvents.filter((event) => {
           const age = Date.now() - Date.parse(event.releaseAt);
-          return age >= 90 * 60000 && age <= 72 * 3600000 && !event.actual;
+          return age >= 90 * 60000 && age <= 72 * 3600000 && !event.actual && Boolean(event.consensus || event.prior); // speeches have no figure
         });
         log.info({ events: calendarEvents.length, missingActual: missingActual.length }, "Economic calendar refreshed");
         if (missingActual.length) log.warn({ events: missingActual.map((event) => event.name) }, "Calendar release still has no actual; no result will be invented");

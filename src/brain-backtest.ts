@@ -5,6 +5,7 @@ import { atomicWrite } from "./brain-store.js";
 import { assessEvent } from "./event-intelligence.js";
 import { parseRss } from "./brain-hunter.js";
 import { zonedTime } from "./briefing.js";
+import { gated } from "./yahoo.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
@@ -250,7 +251,8 @@ export class Backtest {
     return this.fetcher(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; HitnRunBacktest/1.0)", Accept: "*/*" }, signal: AbortSignal.timeout(20_000) });
   }
   private async yahoo(symbol: string, range: string, interval: string): Promise<Bar[]> {
-    const r = await this.get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`);
+    const yurl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
+    const r = await gated(this.fetcher)(yurl, { signal: AbortSignal.timeout(20_000) });
     if (!r.ok) throw new Error(`yahoo ${symbol} ${r.status}`);
     const b = await r.json() as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null> }> } }> } };
     const res = b.chart?.result?.[0]; const c = res?.indicators?.quote?.[0]?.close ?? [];

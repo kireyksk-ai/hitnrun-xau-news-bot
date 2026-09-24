@@ -1,4 +1,5 @@
 import pino from "pino";
+import { gated } from "./yahoo.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
@@ -19,7 +20,7 @@ let cachedAt = 0;
 
 async function quote(item: Quote): Promise<SnapshotItem | null> {
     try {
-          const response = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/" + encodeURIComponent(item.symbol) + "?range=1d&interval=5m", {
+          const response = await gated(fetch)("https://query1.finance.yahoo.com/v8/finance/chart/" + encodeURIComponent(item.symbol) + "?range=1d&interval=5m", {
                   headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" },
                   signal: AbortSignal.timeout(8_000)
           });

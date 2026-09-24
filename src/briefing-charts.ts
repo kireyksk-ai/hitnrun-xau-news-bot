@@ -1,4 +1,5 @@
 import pino from "pino";
+import { gated } from "./yahoo.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
@@ -32,7 +33,7 @@ export async function fetchSeries(asset: { label: string; symbol: string }, sinc
   const problems: string[] = [];
   for (const symbol of FALLBACK[asset.symbol] ?? [asset.symbol]) for (const host of ["query1", "query2"]) {
     try {
-      const response = await fetcher(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=15m`, {
+      const response = await gated(fetcher)(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=15m`, {
         headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0 (compatible; HitnRunFX/1.0)" }, signal: AbortSignal.timeout(10_000)
       });
       if (!response.ok) { problems.push(`${symbol}@${host} HTTP ${response.status}`); continue; }

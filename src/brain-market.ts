@@ -1,4 +1,5 @@
 import pino from "pino";
+import { gated } from "./yahoo.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
@@ -24,7 +25,7 @@ const cache = new Map<string, { at: number; bars: Bar[] }>();
 const workingSymbol = new Map<Asset, string>();
 
 async function yahoo(symbol: string, interval: string, range: string, fetcher: Fetcher): Promise<Bar[]> {
-  const response = await fetcher(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`, {
+  const response = await gated(fetcher)(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`, {
     headers: { Accept: "application/json", "User-Agent": "HitnRunFX/1.0" }, signal: AbortSignal.timeout(10_000)
   });
   if (!response.ok) throw new Error(`Yahoo ${symbol} ${response.status}`);
