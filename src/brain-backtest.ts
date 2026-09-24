@@ -54,7 +54,8 @@ export type Results = {
   themes: Record<string, Record<string, { days: number; meanDaily: number; upShare: number }>>;
   iterations: number; status: string;
 };
-type State = { stage: "PRICES" | "FRED" | "RELEASES" | "NEWS" | "DONE"; step: number; releasesDone?: boolean; releaseIndex: number; vintageQueue: Array<{ key: string; date: string }>; newsIndex: number; iterations: number; lastRefresh: number };
+type AlfredCursor = { series: number; period: number; lo: string; hi: string; best?: string };
+type State = { stage: "PRICES" | "FRED" | "RELEASES" | "NEWS" | "DONE"; step: number; releasesDone?: boolean; alfred?: AlfredCursor; releaseIndex: number; vintageQueue: Array<{ key: string; date: string }>; newsIndex: number; iterations: number; lastRefresh: number };
 
 // ---------- pure helpers (tested) ----------
 export function valueAt(bars: Bar[], t: number): number | undefined {
@@ -230,6 +231,38 @@ export function formatStatus(r: Results | null, s: State): string {
     `Sel: YAKIN ${conf.YAKIN ?? 0} · CUKUP ${conf.CUKUP ?? 0} · BELUM ${conf.BELUM ?? 0}`, top.length ? `Temuan terkuat:\n${top.join("\n")}` : ""].filter(Boolean).join("\n");
 }
 
+/** Key-less ALFRED sources: primary series (release day found by bisection) and the releases read on that day. */
+export const ALFRED_SERIES: Array<{ id: string; kind: "M" | "Q" | "W"; clock: string; specs: string[] }> = [
+  { id: "CPIAUCSL", kind: "M", clock: "08:30", specs: ["CPI", "CORECPI"] }, { id: "PAYEMS", kind: "M", clock: "08:30", specs: ["NFP", "UNRATE"] },
+  { id: "PCEPILFE", kind: "M", clock: "08:30", specs: ["COREPCE"] }, { id: "PPIFIS", kind: "M", clock: "08:30", specs: ["PPI"] },
+  { id: "RSAFS", kind: "M", clock: "08:30", specs: ["RETAIL"] }, { id: "A191RL1Q225SBEA", kind: "Q", clock: "08:30", specs: ["GDP"] },
+  { id: "ICSA", kind: "W", clock: "08:30", specs: ["CLAIMS"] }
+];
+export const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
+export const midDay = (a: string, b: string) => new Date(Math.floor((Date.parse(`${a}T00:00:00Z`) + Date.parse(`${b}T00:00:00Z`)) / 2 / 86400_000) * 86400_000).toISOString().slice(0, 10);
+/** Observation dates (as ALFRED labels them) whose release falls in the window. */
+export function alfredPeriods(kind: "M" | "Q" | "W", since: number, now: number): string[] {
+  const out: string[] = [];
+  if (kind === "W") {
+    // ICSA is labelled by the week-ending Saturday.
+    const d = new Date(since); d.setUTCDate(d.getUTCDate() + ((6 - d.getUTCDay() + 7) % 7));
+    for (let t = d.getTime(); t < now - 5 * 86400_000; t += 7 * 86400_000) out.push(new Date(t).toISOString().slice(0, 10));
+    return out;
+  }
+  const step = kind === "Q" ? 3 : 1;
+  const d = new Date(since); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - (kind === "Q" ? 4 : 2));
+  if (kind === "Q") d.setUTCMonth(Math.floor(d.getUTCMonth() / 3) * 3);
+  for (; d.getTime() < now - 20 * 86400_000; d.setUTCMonth(d.getUTCMonth() + step)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+/** Days in which the release of `period` can fall. */
+export function releaseWindow(kind: "M" | "Q" | "W", period: string): { lo: string; hi: string } {
+  if (kind === "W") return { lo: addDays(period, 1), hi: addDays(period, 9) };
+  const d = new Date(`${period}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + (kind === "Q" ? 3 : 1));
+  const lo = d.toISOString().slice(0, 10);
+  return { lo, hi: addDays(lo, kind === "Q" ? 40 : 45) };
+}
+
 // ---------- runner ----------
 type Fetcher = typeof fetch;
 export class Backtest {
@@ -286,12 +319,12 @@ export class Backtest {
         const fred = this.read<Record<string, Bar[]>>("fred.json") ?? {};
         const keys = Object.keys(FRED_DAILY); const k = keys[s.step];
         fred[k] = await this.fredCsv(FRED_DAILY[k]); atomicWrite(join(this.dir, "fred.json"), fred); log.info({ series: k, obs: fred[k].length }, "Backtest FRED daily");
-        s.step++; if (s.step >= keys.length) { s.stage = this.fredKey ? "RELEASES" : "NEWS"; s.step = 0; this.analyse(); }
+        s.step++; if (s.step >= keys.length) { s.stage = "RELEASES"; s.step = 0; this.analyse(); }
       } else if (s.stage === "RELEASES") {
-        await this.releaseStep();
-      } else if ((s.stage === "NEWS" || s.stage === "DONE") && this.fredKey && !s.releasesDone) {
-        // FRED key added after the first run: go back and collect the release history.
-        s.stage = "RELEASES"; s.releaseIndex = 0; s.vintageQueue = [];
+        if (this.fredKey) await this.releaseStep(); else await this.alfredStep(now);
+      } else if ((s.stage === "NEWS" || s.stage === "DONE") && !s.releasesDone) {
+        // Release history not collected yet (first run, or the key-less ALFRED path added later).
+        s.stage = "RELEASES"; s.releaseIndex = 0; s.vintageQueue = []; s.alfred = undefined;
       } else if (s.stage === "NEWS") {
         await this.newsStep(now);
       } else if (now - s.lastRefresh > 7 * 86400_000) {
@@ -302,7 +335,7 @@ export class Backtest {
       log.warn({ err: error, stage: s.stage, step: s.step }, "Backtest step failed; will retry");
       if (s.stage === "PRICES" || s.stage === "FRED") s.step++; // skip a dead symbol instead of blocking the pipeline
       if (s.stage === "PRICES" && s.step >= Object.keys(YAHOO).length + HOURLY.length) { s.stage = "FRED"; s.step = 0; }
-      if (s.stage === "FRED" && s.step >= Object.keys(FRED_DAILY).length) { s.stage = this.fredKey ? "RELEASES" : "NEWS"; s.step = 0; }
+      if (s.stage === "FRED" && s.step >= Object.keys(FRED_DAILY).length) { s.stage = "RELEASES"; s.step = 0; }
     }
     this.save();
   }
@@ -336,6 +369,54 @@ export class Backtest {
           actual: fig.actual, prior: fig.prior, trend: fig.trend, surprise, hawkish: spec.hawkishIsHigh ? surprise > 0 : surprise < 0 };
         appendFileSync(join(this.dir, "releases.jsonl"), JSON.stringify(ev) + "\n");
       }
+    }
+  }
+  /**
+   * Key-less release history from ALFRED (archival FRED): for every new observation, find by
+   * bisection the first vintage date that contains it = the release day, and read the numbers
+   * as published that day. Several probes per step, politely spaced.
+   */
+  private async alfredStep(now: number): Promise<void> {
+    const s = this.state;
+    for (let probe = 0; probe < 5; probe++) {
+      const series = ALFRED_SERIES[s.alfred?.series ?? 0];
+      if (!series) { s.releasesDone = true; s.alfred = undefined; s.stage = s.newsIndex >= this.years * 52 * NEWS_QUERIES.length ? "DONE" : "NEWS"; this.analyse(); return; }
+      const since = now - (s.releasesDone ? 70 : this.years * 365) * 86400_000;
+      const periods = alfredPeriods(series.kind, since, now);
+      const cur: AlfredCursor = s.alfred ?? { series: 0, period: 0, lo: "", hi: "" };
+      if (cur.period >= periods.length) { s.alfred = { series: cur.series + 1, period: 0, lo: "", hi: "" }; continue; }
+      const p = periods[cur.period];
+      if (!cur.lo) { const w = releaseWindow(series.kind, p); cur.lo = w.lo; cur.hi = w.hi < dayKey(now) ? w.hi : dayKey(now); cur.best = undefined; }
+      s.alfred = cur;
+      if (cur.lo > cur.hi) {
+        if (cur.best) await this.recordAlfred(series, p, cur.best);
+        s.alfred = { series: cur.series, period: cur.period + 1, lo: "", hi: "" };
+        continue;
+      }
+      // Bisection on the day: does the vintage of `mid` already contain period p?
+      const mid = midDay(cur.lo, cur.hi);
+      const rows = await this.alfredRows(series.id, mid, p);
+      if (rows.some((r) => r[0] >= p)) { cur.best = mid; cur.hi = addDays(mid, -1); } else cur.lo = addDays(mid, 1);
+      if (this.fetcher === fetch) await new Promise((r) => setTimeout(r, 1200)); // polite to ALFRED; no wait with an injected fetcher (tests)
+    }
+  }
+  private async alfredRows(id: string, vintage: string, period: string): Promise<Array<[string, number]>> {
+    const cosd = addDays(period, -560);
+    const r = await this.get(`https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=${id}&vintage_date=${vintage}&cosd=${cosd}`);
+    if (!r.ok) throw new Error(`alfred ${id} ${r.status}`);
+    return (await r.text()).split("\n").slice(1).map((l) => l.split(",")).filter((x) => x.length >= 2 && x[1] && x[1] !== ".").map((x) => [x[0], Number(x[1])] as [string, number]).filter((x) => Number.isFinite(x[1]));
+  }
+  private async recordAlfred(series: typeof ALFRED_SERIES[number], period: string, day: string): Promise<void> {
+    for (const key of series.specs) {
+      const spec = RELEASES.find((r) => r.key === key)!;
+      const rows = (await this.alfredRows(spec.series, day, period)).filter((r) => r[0] <= period);
+      if (!rows.length || rows[rows.length - 1][0] !== period) continue;
+      const fig = releaseFigures(spec, rows.map((r) => r[1]));
+      if (!fig) continue;
+      const surprise = +(fig.actual - (fig.trend ?? fig.prior ?? fig.actual)).toFixed(4);
+      const ev: ReleaseEvent = { key: spec.key, family: spec.family, name: spec.name, date: day, at: zonedTime(day, series.clock, "America/New_York"),
+        actual: fig.actual, prior: fig.prior, trend: fig.trend, surprise, hawkish: spec.hawkishIsHigh ? surprise > 0 : surprise < 0 };
+      appendFileSync(join(this.dir, "releases.jsonl"), JSON.stringify(ev) + "\n");
     }
   }
   private async newsStep(now: number): Promise<void> {
