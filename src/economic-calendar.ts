@@ -102,10 +102,10 @@ export function dueStage(event: CalendarEvent, nowMs: number, delivery: Delivery
   const offset = nowMs - Date.parse(event.releaseAt);
   const pending = (sent: Record<string, number> | undefined) => destinations.length ? destinations.some((id) => !sent?.[id]) : !sent || !Object.keys(sent).length;
   // Never flood Telegram with historical results discovered only after deployment.
-  // A result follows every release that was worth a warning (or is high impact), while it is still fresh (6h),
-  // so a newly available actual source can never flood the group with old or minor prints.
+  // A result follows every release that was worth a warning, every high-impact one and every US medium-impact data print (owner wants e.g. Michigan sentiment),
+  // while it is still fresh (6h), so a newly available actual source can never flood the group with old or low-impact prints.
   const warned = Boolean(delivery.warnedTo && Object.keys(delivery.warnedTo).length);
-  if (delivery.releaseAt && offset >= 60000 && offset <= 6 * 3600000 && event.actual && (event.impact === "high" || warned) && pending(delivery.actualTo)) return "ACTUAL";
+  if (delivery.releaseAt && offset >= 60000 && offset <= 6 * 3600000 && event.actual && (event.impact === "high" || warned || (event.impact === "medium" && currencyOf(event) === "USD")) && pending(delivery.actualTo)) return "ACTUAL";
   if (event.impact === "high" && offset >= -600000 && offset < 0 && pending(delivery.warnedTo)) return "WARNING";
   return null;
 }

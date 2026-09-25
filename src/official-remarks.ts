@@ -39,6 +39,8 @@ export function officialRemark(article: Pick<NewsArticle, "title" | "summary">):
   if (!who) return undefined;
   // Market recaps, previews and opinion pieces quote officials but add no new remark.
   if (/\b(preview|week ahead|what to watch|recap|wrap|explainer|opinion|analysis:|how to trade|stocks? to (?:buy|watch)|price prediction)\b/i.test(title)) return undefined;
+  // Multi-story roundups ("Trump: 'Productive' Xi Meeting, Consumer Sentiment Falls, More") are digests, not a new remark.
+  if (/,\s*More\b|\bStocks? (?:Steady|Rise|Fall|Slip|Gain)|\bMarkets? Wrap\b|\bBriefing\b/i.test(title)) return undefined;
   return { who, topic: topic.toLowerCase() };
 }
 
