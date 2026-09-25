@@ -134,7 +134,8 @@ export function validateBriefing(text: string): { ok: true; text: string } | { o
   const noTags = text.trim().replace(/```[a-z]*\n?|```/gi, "").replace(/<(?!\/?b>)\/?[a-z][^>]*>/gi, "");
   const visible = noTags.replace(/<\/?b>/g, "");
   const words = visible.split(/\s+/).filter(Boolean).length;
-  if (words < 60 || words > 420 || visible.length > 3800) return { ok: false, reason: `briefing length ${words} words` };
+  // The character cap is the real Telegram limit; the word cap only stops runaway essays.
+  if (words < 60 || words > 560 || visible.length > 3800) return { ok: false, reason: `briefing length ${words} words` };
   if (/https?:\/\/|www\./i.test(visible)) return { ok: false, reason: "link in briefing" };
   if (/\b(sources?|sumber\s*:|bot|AI)\b/.test(visible) || /\b(sources?|sumber\s*:)/i.test(visible)) return { ok: false, reason: "source list or bot/AI mention in briefing" };
   if (/\b(entry|stop ?loss|take profit|zona (?:buy|sell)|buy di|sell di|target harga|pasti naik|pasti turun|dijamin)\b/i.test(visible) || /\b(TP|SL)\b/.test(visible)) return { ok: false, reason: "trading instruction or guarantee in briefing" };

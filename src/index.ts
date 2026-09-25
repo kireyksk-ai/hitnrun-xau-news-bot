@@ -491,7 +491,12 @@ async function briefingTick(): Promise<void> {
     const input = { kind, nowWib: j.label, recapHours: hours, sentAlerts, rejectedButMoved: rejectedButMoved(shadowOutcomes.all(), now, hours, 6), market, stats: visuals.stats,
       upcoming: upcomingEvents(calendarEvents, now, SESSION[kind].upcomingHours).map((e) => ({ ...e, history: [brain?.calendarInsight(e.name), currencyOf({ ...e, url: "" }) === "USD" ? backtest?.insight(e.name, brain?.linkage() ?? "MIXED") : ""].filter(Boolean).join(" | ") || undefined })), released: releasedEvents(calendarEvents, now, hours) };
     let checked: ReturnType<typeof validateBriefing> = { ok: false, reason: "not generated" };
-    for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input)));
+    for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) {
+      // The retry is told exactly why the first draft was rejected, instead of repeating the same prompt.
+      const retryNote = attempt && !checked.ok ? `\n\nDRAF SEBELUMNYA DITOLAK (${checked.reason}). Tulis ulang lebih ringkas: maksimal ${SESSION[kind].words} kata, patuhi semua aturan di atas.` : "";
+      checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input) + retryNote));
+      if (!checked.ok) log.warn({ kind, attempt, reason: checked.reason }, "Briefing draft rejected; retrying");
+    }
     // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.
     briefings.mark(kind, j.day);
     if (!checked.ok) { log.warn({ kind, reason: checked.reason }, "Briefing rejected by validator"); return; }
