@@ -31,7 +31,7 @@ import { mustReview, priorityOf } from "./brain-events.js";
 import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind, recapSince, SESSION } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
-import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatWib, goldLinkNote, printFacts, type CalendarEvent } from "./economic-calendar.js";
+import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatSpeechResult, formatWib, goldLinkNote, isSpeech, printFacts, speakerOf, type CalendarEvent } from "./economic-calendar.js";
 import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
 import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
 import { parseRss } from "./brain-hunter.js";
@@ -306,8 +306,49 @@ async function calendarTick(): Promise<void> {
       if (Object.keys(accepted).length) { calendarLedger.mark(event.id, stage, accepted); recentSendTimes.push(Date.now()); if (stage === "ACTUAL" && event.actual) { postedReleases.push({ at: Date.now(), name: event.name, actual: event.actual }); postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); } }
       log.info({ event: event.name, stage, accepted: Object.keys(accepted).length }, "Calendar alert processed");
     }
+    await speechResults();
   } finally { calendarTicking = false; }
 }
+/**
+ * A warned speech has no figure, so its result is what was said: 20 minutes to 4 hours after the start,
+ * headlines naming the speaker (fetched by any provider, sent or not) are summarised into a HASIL post.
+ * Nothing is posted when no headline exists; nothing is invented.
+ */
+async function speechResults(): Promise<void> {
+  if (!calendarLedger || store.safeMode) return;
+  const now = Date.now();
+  const due = calendarEvents.filter((e) => {
+    const age = now - Date.parse(e.releaseAt), d = calendarLedger!.get(e.id);
+    return isSpeech(e) && age >= 20 * 60_000 && age <= 4 * 3_600_000 && Boolean(d.warnedTo && Object.keys(d.warnedTo).length) && !(d.actualTo && Object.keys(d.actualTo).length);
+  });
+  if (!due.length || now - lastSpeechScan < 5 * 60_000) return;
+  lastSpeechScan = now;
+  const archive = readArchive(`${config.SQLITE_PATH}.raw`, new Date(now), 2);
+  for (const event of due) {
+    const speaker = speakerOf(event.name);
+    if (!speaker) continue;
+    const from = Date.parse(event.releaseAt) - 15 * 60_000, re = new RegExp(`\\b${speaker}\\b`, "i");
+    const titles = [...new Set(archive.filter((a) => re.test(a.item.title ?? "") && Date.parse(a.item.publishedAt ?? a.fetchedAt) >= from).map((a) => (a.item.title ?? "").trim()))].slice(0, 12);
+    const age = now - Date.parse(event.releaseAt);
+    if (!titles.length) { if (age > 3.5 * 3_600_000) log.info({ event: event.name, speaker }, "Speech result skipped: no headlines"); continue; }
+    // Give the wires time to publish more than one line unless the talk is already well past.
+    if (titles.length < 2 && age < 60 * 60_000) continue;
+    const currency = currencyOf(event);
+    const pending = destinations.filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
+    if (!pending.length) continue;
+    try {
+      const context = [`MATA UANG: ${currency}. ${goldLinkNote(currency)}`, `HEADLINE PIDATO ${speaker.toUpperCase()} (satu-satunya bahan fakta):\n${titles.map((t) => `- ${t}`).join("\n")}`,
+        brain ? await brain.calendarContext(event, "ACTUAL") : await marketSnapshot().catch(() => "")].filter(Boolean).join("\n");
+      const written = await briefingEditor.calendarText({ stage: "ACTUAL", speech: true, name: event.name, country: currency, releaseWib: formatWib(event.releaseAt), actual: null, consensus: null, prior: null, context });
+      if (!written.meaning || !written.narrative || /https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(`${written.meaning} ${written.narrative}`)) continue;
+      const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, pending, formatSpeechResult(event, written, titles.length), store);
+      for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Speech result destination failed");
+      if (Object.keys(accepted).length) { calendarLedger.mark(event.id, "ACTUAL", accepted); recentSendTimes.push(Date.now()); }
+      log.info({ event: event.name, speaker, headlines: titles.length, accepted: Object.keys(accepted).length }, "Speech result processed");
+    } catch (error) { log.warn({ err: error, event: event.name }, "Speech result failed"); }
+  }
+}
+let lastSpeechScan = 0;
 function jakartaDayAndHour(date = new Date()): { day: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta",
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false }).formatToParts(date);

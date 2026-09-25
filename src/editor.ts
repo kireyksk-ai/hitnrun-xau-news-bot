@@ -304,9 +304,11 @@ export class Editor {
   }
 
   /** Pre-release warning or post-release result for a scheduled event, in the owner's voice. */
-  async calendarText(input: { stage: "WARNING" | "ACTUAL"; name: string; country: string; releaseWib: string; actual: string | null; consensus: string | null; prior: string | null; context: string }): Promise<{ meaning: string; narrative: string }> {
+  async calendarText(input: { stage: "WARNING" | "ACTUAL"; name: string; country: string; releaseWib: string; actual: string | null; consensus: string | null; prior: string | null; context: string; speech?: boolean }): Promise<{ meaning: string; narrative: string }> {
     const schema = { type: "object", additionalProperties: false, properties: { meaning: { type: "string" }, narrative: { type: "string" } }, required: ["meaning", "narrative"] };
-    const task = input.stage === "WARNING"
+    const task = input.speech
+      ? "SETELAH PIDATO. Bahannya HANYA headline pidato di konteks. meaning: 1-2 kalimat inti yang benar-benar diucapkan dan apakah nadanya lebih hawkish, dovish, atau netral dibanding sikap sebelumnya. narrative: emas condong ke mana lewat rantai apa, apakah reaksi pasar sejak pidato mengonfirmasi; satu kalimat apa yang bisa membalik. Jangan mengarang kutipan atau angka di luar headline. Maksimal 110 kata total."
+      : input.stage === "WARNING"
       ? "SEBELUM RILIS. meaning: 1-2 kalimat kenapa data ini penting buat emas sekarang (pakai rezim & rantai playbook). narrative: skenario jelas — kalau angka DI ATAS perkiraan emas condong ke mana dan kenapa (rantai sebab-akibat), kalau DI BAWAH perkiraan condong ke mana; sebut kebiasaan historis kalau ada. Maksimal 90 kata total."
       : "SETELAH RILIS. meaning: 1-2 kalimat: angkanya beat/miss/sesuai berapa dibanding perkiraan dan artinya. narrative: ambil sikap — emas condong ke mana sekarang, lewat rantai apa, dan apakah REAKSI SEJAK RILIS mengonfirmasi atau melawan; satu kalimat apa yang bisa ngebalik. Maksimal 110 kata total.";
     const response = await this.client.responses.create({

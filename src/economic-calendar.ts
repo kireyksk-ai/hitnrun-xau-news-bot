@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { fillActualsFromNasdaq } from "./calendar-nasdaq.js";
 import { dirname } from "node:path";
 
 export type CalendarEvent = {
@@ -87,8 +88,10 @@ export async function fetchCalendarEvents(fetcher: typeof fetch = fetch, now = n
   const secondary = fc.status === "fulfilled" ? fc.value : [];
   if (!primary.length) { if (fc.status === "rejected" && ff.status === "rejected") throw ff.reason; return secondary; }
   const lo = now.getTime() - 3 * 86400_000, hi = now.getTime() + 14 * 86400_000;
-  return primary.filter((e) => Date.parse(e.releaseAt) >= lo && Date.parse(e.releaseAt) <= hi)
+  const merged = primary.filter((e) => Date.parse(e.releaseAt) >= lo && Date.parse(e.releaseAt) <= hi)
     .map((e) => e.actual ? e : { ...e, actual: secondary.find((x) => x.actual && sameRelease(e, x))?.actual ?? null });
+  // Neither feed reliably carries the actual; Nasdaq's calendar does (see calendar-nasdaq.ts).
+  return fillActualsFromNasdaq(merged, currencyOf, fetcher, now.getTime());
 }
 
 export function formatWib(releaseAt: string): string {
@@ -99,7 +102,10 @@ export function dueStage(event: CalendarEvent, nowMs: number, delivery: Delivery
   const offset = nowMs - Date.parse(event.releaseAt);
   const pending = (sent: Record<string, number> | undefined) => destinations.length ? destinations.some((id) => !sent?.[id]) : !sent || !Object.keys(sent).length;
   // Never flood Telegram with historical results discovered only after deployment.
-  if (delivery.releaseAt && offset >= 60000 && offset <= 72 * 3600000 && event.actual && pending(delivery.actualTo)) return "ACTUAL";
+  // A result follows every release that was worth a warning (or is high impact), while it is still fresh (6h),
+  // so a newly available actual source can never flood the group with old or minor prints.
+  const warned = Boolean(delivery.warnedTo && Object.keys(delivery.warnedTo).length);
+  if (delivery.releaseAt && offset >= 60000 && offset <= 6 * 3600000 && event.actual && (event.impact === "high" || warned) && pending(delivery.actualTo)) return "ACTUAL";
   if (event.impact === "high" && offset >= -600000 && offset < 0 && pending(delivery.warnedTo)) return "WARNING";
   return null;
 }
@@ -165,6 +171,27 @@ export function formatCalendarMessage(event: CalendarEvent, stage: "WARNING" | "
     : analysed ? "" : "Reaksi awal pasar bisa berubah; arah emas belum terkonfirmasi hanya dari angka rilis.";
   return [`<b>${header}</b>`, `<b>${label}</b> — ${formatWib(event.releaseAt)}`, stats,
     escapeHtml(explanation.meaning), escapeHtml(explanation.narrative), caution].filter(Boolean).join("\n\n");
+}
+
+
+/** Scheduled talks have no figure; their "result" is what was said. */
+export function isSpeech(e: Pick<CalendarEvent, "name" | "consensus" | "prior">): boolean {
+  return !e.consensus && !e.prior && /\b(speaks|speech|testifies|testimony|press conference|remarks|statement)\b/i.test(e.name);
+}
+/** Surname to look for in headlines ("FOMC Member Williams Speaks" -> Williams). */
+export function speakerOf(name: string): string | null {
+  const direct = name.match(/([A-Z][a-zA-Z'\-]+)\s+(?:Speaks|Speech|Testifies|Testimony|Remarks)\b/);
+  if (direct && !/^(Chair|Member|Governor|President|Gov|Speaks|Fed|FOMC|ECB|BOE|BOJ|Treasury)$/.test(direct[1])) return direct[1];
+  if (/FOMC Press Conference|Fed Chair/i.test(name)) return "Powell";
+  if (/ECB Press Conference|ECB President/i.test(name)) return "Lagarde";
+  if (/BOE Gov|MPC.*Press/i.test(name)) return "Bailey";
+  if (/BOJ Press Conference|BOJ Gov/i.test(name)) return "Ueda";
+  return null;
+}
+export function formatSpeechResult(event: CalendarEvent, explanation: { meaning: string; narrative: string }, headlines: number): string {
+  const cur = currencyOf(event), where = countryTag(cur, event.country);
+  return [`<b>📰 HASIL ${where}${event.impact === "high" ? " ⭐⭐⭐" : ""}</b>`, `<b>${escapeHtml(event.name)}</b> — ${formatWib(event.releaseAt)}`,
+    `Ringkasan dari ${headlines} headline pidato`, escapeHtml(explanation.meaning), escapeHtml(explanation.narrative)].join("\n\n");
 }
 
 /** Institutional post-release note for US data: one message per release time, seven sections. */
