@@ -600,16 +600,17 @@ async function briefingTick(): Promise<void> {
     briefings.mark(kind, j.day);
     if (!checked.ok) { log.warn({ kind, reason: checked.reason }, "Briefing rejected by validator"); return; }
     // Images first (stats), then the analysis. An album failure never blocks the text.
-    // Owner rule (2026-09-25): briefings go to the HnR Regular group only, never to the Academy group.
-    const briefingTargets = destinations.filter((d) => d.chatId === config.TELEGRAM_CHAT_ID_REGULAR);
-    if (!briefingTargets.length) { log.warn({ kind }, "Briefing skipped: TELEGRAM_CHAT_ID_REGULAR is not set"); return; }
-    if (visuals.images.length) for (const destination of briefingTargets) {
+    // Owner rule (2026-09-25): every group gets the briefing; only HnR Regular gets the Academy sign-up link under it.
+    if (visuals.images.length) for (const destination of destinations) {
       try { await sendTelegramAlbum(config.TELEGRAM_BOT_TOKEN, destination, visuals.images); }
       catch (error) { log.warn({ err: error, chatId: destination.chatId }, "Briefing charts not delivered"); }
     }
-    const text = config.BRIEFING_FOOTER ? `${checked.text}\n\n${config.BRIEFING_FOOTER}` : checked.text;
-    const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, briefingTargets, text, store);
-    log.info({ kind, images: visuals.images.length, accepted: Object.keys(accepted).length, failures: failures.length, alerts: sentAlerts.length, upcoming: input.upcoming.length }, "Briefing sent");
+    const regular = destinations.filter((d) => d.chatId === config.TELEGRAM_CHAT_ID_REGULAR), others = destinations.filter((d) => d.chatId !== config.TELEGRAM_CHAT_ID_REGULAR);
+    const withLink = config.BRIEFING_FOOTER ? `${checked.text}\n\n${config.BRIEFING_FOOTER}` : checked.text;
+    const plain = others.length ? await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, others, checked.text, store) : { accepted: {}, failures: [] };
+    const linked = regular.length ? await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, regular, withLink, store) : { accepted: {}, failures: [] };
+    const accepted = { ...plain.accepted, ...linked.accepted }, failures = [...plain.failures, ...linked.failures];
+    log.info({ kind, images: visuals.images.length, accepted: Object.keys(accepted).length, withLink: Object.keys(linked.accepted).length, failures: failures.length, alerts: sentAlerts.length, upcoming: input.upcoming.length }, "Briefing sent");
   } catch (error) {
     log.error({ err: error, kind }, "Briefing failed");
     // Up to 3 attempts inside the window, then give up for the day instead of hammering the API.
