@@ -101,7 +101,9 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.increment("duplicatesRemoved");
     return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "Source/author/post/content identity already processed" };
   }
-  if ((previous && !(previous.stage === "SOURCE" && event.sourceTier <= 2)) || event.informationDelta === 0) {
+  // A candidate whose AI call failed (outage, no credits) is judged again when any copy returns within an hour.
+  const retryAfterOutage = previous?.stage === "AI_CONTRACT_FAILURE" && now.getTime() - Date.parse(previous.event.firstSeenAt) <= 3600_000;
+  if ((previous && !(previous.stage === "SOURCE" && event.sourceTier <= 2) && !retryAfterOutage) || (event.informationDelta === 0 && !retryAfterOutage)) {
     deps.store.increment("duplicatesRemoved");
     return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "No information delta or event already processed" };
   }

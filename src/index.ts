@@ -485,6 +485,7 @@ async function tick(): Promise<void> {
       try { const observed = await observeMarket(store); log.info({ kind: observed.decision.kind, attribution: observed.decision.attribution, assets: Object.keys(observed.point.values).length }, "Shadow market observer completed"); }
       catch (error) { log.warn({ err: error }, "Shadow market observer failed"); }
     }
+    try { await replayAiFailures(); } catch (error) { log.warn({ err: error }, "AI outage replay failed"); }
     const since = new Date(Date.now() - config.MAX_ARTICLE_AGE_MINUTES * 60000);
     for (const provider of providers) {
       const now = Date.now();
@@ -508,25 +509,7 @@ async function tick(): Promise<void> {
               void calendarTick().catch((error) => log.warn({ err: error }, "Calendar tick after capture failed"));
             }
           } catch (error) { log.warn({ err: error }, "Actual capture failed"); }
-          const result = await processArticle(article, {
-            store, snapshot: marketSnapshot,
-            analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
-            shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
-            deliver,
-            compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
-            onSent: recordPrediction,
-            mustSend: (item) => mustSendRemark(item),
-            important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
-            facts: async (item) => ({
-              page: needsFacts(item.title, item.summary) ? await fetchFacts(item.url).catch(() => "") : "",
-              calendar: calendarMatch(`${item.title} ${item.summary.slice(0, 300)}`, calendarEvents)
-            }),
-            releaseEcho: (item) => calendarEcho(`${item.title} ${item.summary}`, postedReleases, Date.now()),
-            critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
-            sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
-              .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
-              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", officialContext(6, 15), candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
-          });
+          const result = await processArticle(article, articleDeps());
           try { await rememberOutcome(result); } catch (error) { log.warn({ err: error }, "Outcome memory failed"); }
           try { await brain?.onResult(result); } catch (error) { log.warn({ err: error }, "Brain episode failed"); }
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
@@ -546,6 +529,44 @@ async function tick(): Promise<void> {
       catch (error) { log.warn({ err:error, alert:alert.key }, "Admin learning alert failed"); }
     }
   } finally { ticking = false; }
+}
+function articleDeps(): Parameters<typeof processArticle>[1] {
+  return {
+    store, snapshot: marketSnapshot,
+    analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
+    shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
+    deliver,
+    compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
+    onSent: recordPrediction,
+    mustSend: (item) => mustSendRemark(item),
+    important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
+    facts: async (item) => ({
+      page: needsFacts(item.title, item.summary) ? await fetchFacts(item.url).catch(() => "") : "",
+      calendar: calendarMatch(`${item.title} ${item.summary.slice(0, 300)}`, calendarEvents)
+    }),
+    releaseEcho: (item) => calendarEcho(`${item.title} ${item.summary}`, postedReleases, Date.now()),
+    critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
+    sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
+      .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
+      { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", officialContext(6, 15), candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
+  };
+}
+/** After an AI outage (e.g. no credits) the failed candidates of the last hour (older news is stale) are judged again, a few per tick. */
+const replayTries = new Map<string, { n: number; at: number }>();
+async function replayAiFailures(): Promise<void> {
+  const now = Date.now();
+  const due = store.records().filter((r) => r.stage === "AI_CONTRACT_FAILURE" && now - Date.parse(r.event.firstSeenAt) <= 3_600_000)
+    .filter((r) => { const t = replayTries.get(r.id); return !t || (t.n < 3 && now - t.at >= 120_000); })
+    .sort((a, b) => b.event.firstSeenAt.localeCompare(a.event.firstSeenAt)).slice(0, 3);
+  for (const r of due) {
+    const t = replayTries.get(r.id); replayTries.set(r.id, { n: (t?.n ?? 0) + 1, at: now });
+    try {
+      const result = await processArticle({ ...r.article, publishedAt: new Date(r.article.publishedAt) }, articleDeps());
+      try { await rememberOutcome(result); } catch { /* measurement only */ }
+      log.info({ title: r.article.title.slice(0, 120), stage: result.stage, reason: result.reason.slice(0, 120) }, "Replayed after AI outage");
+    } catch (error) { log.warn({ err: error, id: r.id }, "Replay after AI outage failed"); }
+  }
+  if (replayTries.size > 500) for (const [k, v] of replayTries) if (now - v.at > 3 * 3_600_000) replayTries.delete(k);
 }
 /** Morning / 21:00 WIB desk briefing: recap + what to watch. One AI call each, outside the per-article budget. */
 async function briefingTick(): Promise<void> {
@@ -579,11 +600,15 @@ async function briefingTick(): Promise<void> {
     briefings.mark(kind, j.day);
     if (!checked.ok) { log.warn({ kind, reason: checked.reason }, "Briefing rejected by validator"); return; }
     // Images first (stats), then the analysis. An album failure never blocks the text.
-    if (visuals.images.length) for (const destination of destinations) {
+    // Owner rule (2026-09-25): briefings go to the HnR Regular group only, never to the Academy group.
+    const briefingTargets = destinations.filter((d) => d.chatId === config.TELEGRAM_CHAT_ID_REGULAR);
+    if (!briefingTargets.length) { log.warn({ kind }, "Briefing skipped: TELEGRAM_CHAT_ID_REGULAR is not set"); return; }
+    if (visuals.images.length) for (const destination of briefingTargets) {
       try { await sendTelegramAlbum(config.TELEGRAM_BOT_TOKEN, destination, visuals.images); }
       catch (error) { log.warn({ err: error, chatId: destination.chatId }, "Briefing charts not delivered"); }
     }
-    const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, checked.text, store);
+    const text = config.BRIEFING_FOOTER ? `${checked.text}\n\n${config.BRIEFING_FOOTER}` : checked.text;
+    const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, briefingTargets, text, store);
     log.info({ kind, images: visuals.images.length, accepted: Object.keys(accepted).length, failures: failures.length, alerts: sentAlerts.length, upcoming: input.upcoming.length }, "Briefing sent");
   } catch (error) {
     log.error({ err: error, kind }, "Briefing failed");
