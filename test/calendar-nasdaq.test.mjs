@@ -50,3 +50,16 @@ test("fill only recent released events and survive a failing source", async () =
   const down = await fillActualsFromNasdaq(events, currencyOf, async () => { throw new Error("blocked"); }, Date.parse("2026-09-24T12:33:00Z"));
   assert.equal(down[0].actual, null);
 });
+
+test("ForexFactory 'Revised UoM' names match Nasdaq 'Michigan' rows", async () => {
+  const { matchRow } = await import("../dist/calendar-nasdaq.js");
+  const at = Date.parse("2026-09-25T14:00:00Z");
+  const rows = [
+    { at, country: "united states", name: "Michigan Consumer Sentiment", actual: "48.1", consensus: "47.8", previous: "47.8" },
+    { at, country: "united states", name: "Michigan 1-Year Inflation Expectations", actual: "4.7%", consensus: "4.6%", previous: "4.6%" },
+    { at, country: "united states", name: "Michigan Consumer Expectations", actual: "45.1", consensus: "45.8", previous: "45.8" }
+  ];
+  const ev = (name) => ({ name, releaseAt: "2026-09-25T14:00:00Z" });
+  assert.equal(matchRow(ev("Revised UoM Consumer Sentiment"), "USD", rows)?.actual, "48.1");
+  assert.equal(matchRow(ev("Revised UoM Inflation Expectations"), "USD", rows)?.actual, "4.7%");
+});
