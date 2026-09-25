@@ -45,11 +45,11 @@ export function parseNasdaq(json: unknown, queryDay: string): NasdaqRow[] {
   return out;
 }
 
-const DROP = new Set(["s&p", "global", "hcob", "flash", "prelim", "preliminary", "final", "adjusted", "the", "of", "sa", "nsa", "index", "us", "u.s.", "german", "french", "italian", "spanish", "uk", "eurozone", "japan", "japanese", "(mom)", "(yoy)", "(qoq)"]);
+const DROP = new Set(["s&p", "global", "hcob", "flash", "prelim", "preliminary", "final", "revised", "adjusted", "the", "of", "sa", "nsa", "index", "us", "u.s.", "german", "french", "italian", "spanish", "uk", "eurozone", "japan", "japanese", "(mom)", "(yoy)", "(qoq)"]);
 const PERIOD = (s: string) => /\bm\/m|\(mom\)|month/i.test(s) ? "M" : /\by\/y|\(yoy\)|year/i.test(s) ? "Y" : /\bq\/q|\(qoq\)|quarter/i.test(s) ? "Q" : "";
 function tokens(name: string): Set<string> {
   return new Set(name.toLowerCase().replace(/[()]/g, " ").replace(/\b(m\/m|y\/y|q\/q|mom|yoy|qoq)\b/g, " ").split(/[^a-z0-9&.]+/)
-    .map((w) => w === "claims" ? "claim" : w === "sales" ? "sale" : w).filter((w) => w.length > 1 && !DROP.has(w)));
+    .map((w) => w === "claims" ? "claim" : w === "sales" ? "sale" : w === "uom" ? "michigan" : w).filter((w) => w.length > 1 && !DROP.has(w)));
 }
 const NATION: Record<string, string> = { german: "germany", french: "france", italian: "italy", spanish: "spain" };
 
