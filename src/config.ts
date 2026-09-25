@@ -37,7 +37,7 @@ const schema = z.object({
     BRIEFING_US_NEWYORK: z.string().regex(/^\d{2}:\d{2}$/).default("08:00"),
     // Dedicated Sol for briefings (defaults to OPENAI_MODEL) with deeper reasoning; statistic images on by default.
     BRIEFING_MODEL: z.string().optional(),
-    BRIEFING_FOOTER: z.string().default("👉 Gabung HitNRun FX Academy: https://hitnrunfx.id/gabung-hitnrun-fx-academy"),
+    BRIEFING_FOOTER: z.string().default('👉 <b><a href="https://hitnrunfx.id/gabung-hitnrun-fx-academy">Gabung HitNRun FX Academy</a></b>'),
     BRIEFING_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
     BRIEFING_CHARTS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     // Market Brain: episodes, regime engine, outcome labels, lessons, critic, internal (never published) decisions.
