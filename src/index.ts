@@ -1,4 +1,5 @@
 import pino from "pino";
+import { readFileSync, writeFileSync } from "node:fs";
 import { config } from "./config.js";
 import { Editor } from "./editor.js";
 import { IntelligenceStore } from "./intelligence-store.js";
@@ -80,7 +81,16 @@ const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${
 const postedReleases: PostedRelease[] = [];
 // Actuals read from the wires (calendar feeds are often late or empty); applied on every calendar refresh.
 const actualCapture = new ActualCapture();
-const capturedActuals = new Map<string, Captured>();
+// Wire-captured actuals survive restarts (a deploy right after a release used to lose the number, e.g. Michigan 48.1).
+const capturedPath = `${config.SQLITE_PATH}.captured.json`;
+const capturedActuals = new Map<string, Captured>((() => {
+  try { return (JSON.parse(readFileSync(capturedPath, "utf8")) as Captured[]).filter((c) => Date.now() - c.at < 24 * 3_600_000).map((c) => [c.id, c] as [string, Captured]); }
+  catch { return []; }
+})());
+function saveCaptured(): void {
+  try { writeFileSync(capturedPath, JSON.stringify([...capturedActuals.values()].filter((c) => Date.now() - c.at < 24 * 3_600_000))); }
+  catch (error) { log.warn({ err: error }, "Captured actuals not saved"); }
+}
 const withCaptured = (events: CalendarEvent[]) => events.map((e) => !e.actual && capturedActuals.has(e.id) ? { ...e, actual: capturedActuals.get(e.id)!.actual } : e);
 let calendarEvents: CalendarEvent[] = [], lastCalendarFetchAt = 0, calendarTicking = false;
 const predictions = new PredictionLedger(`${config.SQLITE_PATH}.predictions.json`);
@@ -501,7 +511,7 @@ async function tick(): Promise<void> {
           rawArchive.append(provider.name, article);
           try {
             for (const c of actualCapture.offer(article, sourceTier(article), calendarEvents)) {
-              capturedActuals.set(c.id, c);
+              capturedActuals.set(c.id, c); saveCaptured();
               calendarEvents = withCaptured(calendarEvents);
               // The calendar result will carry this number; the news copy of it is then a duplicate.
               postedReleases.push({ at: Date.now(), name: c.name, actual: c.actual });
