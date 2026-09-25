@@ -77,3 +77,20 @@ test("a tier-3 copy is held for corroboration without spending any AI call", asy
   assert.equal(calls, 0);
   assert.equal(r.stage, "SOURCE");
 });
+
+test("a candidate lost to an AI outage is judged again once AI is back", async () => {
+  const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  const { IntelligenceStore } = await import("../dist/intelligence-store.js");
+  const { processArticle } = await import("../dist/pipeline.js");
+  const { AIContractFailure } = await import("../dist/editor.js");
+  const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "xau-replay-")), "state.json"));
+  const article = { provider: "twitter-wire", providerId: "sch-1", sourceName: "X", url: "https://x.com/financialjuice/status/9",
+    title: "@financialjuice: Fed's Schmid: The Fed still hasn't fixed the inflation issue.", summary: "", publishedAt: new Date(), sourceMeta: { sourceClass: "FAST_WIRE" } };
+  const prose = "<b>⚠️ Schmid: Fed belum beres soal inflasi</b>\\n\\nPresiden Fed Kansas City Jeffrey Schmid bilang masalah inflasi belum selesai, sinyal Fed masih condong mempertahankan suku bunga tinggi atau bahkan naik lagi.\\n\\nBuat emas ini menekan karena yield dan dolar cenderung tertahan tinggi, jadi ruang naik emas menyempit selama nada hawkish ini bertahan.";
+  const sent = [];
+  const base = { store, deliver: async (m) => { sent.push(m); return { chat: 1 }; }, compose: async () => ({ message: prose.replace(/\\n/g, "\n") }), mustSend: () => true };
+  const down = await processArticle(article, { ...base, analyze: async () => { throw new AIContractFailure("AI unavailable: 429"); }, shadow: async () => { throw new Error("429"); } });
+  assert.equal(down.stage, "AI_CONTRACT_FAILURE");
+  const up = await processArticle(article, { ...base, analyze: async () => ({ material: false, confidence: "low", reason: "minor", telegramMessage: null }), shadow: async () => ({ material: false, score: 10, reason: "minor" }) });
+  assert.equal(up.stage, "SENT"); assert.equal(sent.length, 1);
+});
