@@ -29,8 +29,11 @@ test("WIB conversion and 10-minute warning window", () => {
   assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 60000, { releaseAt }, ["a"]), "ACTUAL");
   const medium = { ...event, impact: "medium", actual: "56.1" };
   assert.equal(dueStage(medium, t - 9 * 60000, {}, ["a"]), null);
-  assert.equal(dueStage(medium, t + 60000, { releaseAt }, ["a"]), "ACTUAL");
-  assert.equal(dueStage(medium, t + 48 * 3600000, { releaseAt }, ["a"]), "ACTUAL");
+  // Results follow what was warned (or high impact) and only while fresh, so a new actual source cannot flood the group.
+  assert.equal(dueStage(medium, t + 60000, { releaseAt }, ["a"]), null, "minor print that was never warned");
+  assert.equal(dueStage(medium, t + 60000, { releaseAt, warnedTo: { a: 1 } }, ["a"]), "ACTUAL");
+  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 5 * 3600000, { releaseAt }, ["a"]), "ACTUAL");
+  assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 7 * 3600000, { releaseAt }, ["a"]), null, "stale result");
   assert.equal(dueStage(medium, t + 60000, {}, ["a"]), null);
 });
 
