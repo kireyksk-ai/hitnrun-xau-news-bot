@@ -49,7 +49,7 @@ test("forecast snapshot survives restart and post-release output is factual", ()
     const message = formatCalendarMessage(released, "ACTUAL", explanation, second.get(event.id));
     assert.match(message, /Actual: 4\.7% \| Forecast: 4\.5%/);
     assert.match(message, /Actual di atas konsensus/);
-    assert.match(message, /financecalendar\.com/);
+    assert.doesNotMatch(message, /financecalendar\.com|Sumber kalender/, "owner: no source line");
     assert.ok(!/entry|stop loss|take profit/i.test(message));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -57,11 +57,11 @@ test("forecast snapshot survives restart and post-release output is factual", ()
 test("no invented surprise or unsafe markup", () => {
   assert.match(compareActual("5%", null), /belum/);
   assert.match(compareActual("5%", "4K"), /Satuan/);
-  const message = formatCalendarMessage({ ...event, name: "CPI <script>" }, "WARNING", calendarNarrative(event, "WARNING", ""));
+  const message = formatCalendarMessage({ ...event, name: "US CPI <script>" }, "WARNING", calendarNarrative(event, "WARNING", ""));
   assert.match(message, /&lt;script&gt;/);
   assert.match(message, /CLEAR POSISI UNTUK HINDARI RISIKO/);
   assert.match(message, /Jangan judi/);
-  assert.match(message, /financecalendar\.com/);
+  assert.doesNotMatch(message, /financecalendar\.com|Sumber kalender/, "owner: no source line");
 });
 
 test("narrative follows observed cross-asset sentiment without forcing a gold direction", () => {
@@ -76,6 +76,47 @@ test("narrative follows observed cross-asset sentiment without forcing a gold di
 test("non-high result is news without a three-star warning label", () => {
   const medium = { ...event, impact: "medium", actual: "56.1" };
   const message = formatCalendarMessage(medium, "ACTUAL", calendarNarrative(medium, "ACTUAL", ""));
-  assert.match(message, /HASIL BERITA KALENDER/);
+  assert.match(message, /📰 HASIL 🇦🇺 AUSTRALIA \(AUD\)/);
   assert.doesNotMatch(message, /3 BINTANG|⭐⭐⭐|U READY4/);
+});
+
+test("alarm header only for 3-star USD; other currencies get a calm labelled header and their gold link", async () => {
+  const { currencyOf, goldLinkNote } = await import("../dist/economic-calendar.js");
+  assert.equal(currencyOf(event), "AUD"); assert.equal(currencyOf({ ...event, name: "Initial Jobless Claims", url: "" }), "USD");
+  assert.equal(currencyOf({ ...event, name: "German Ifo Business Climate", url: "" }), "EUR");
+  const aud = formatCalendarMessage(event, "WARNING", { meaning: "a", narrative: "b" });
+  assert.match(aud, /📅 RILIS 🇦🇺 AUSTRALIA \(AUD\) — ⭐⭐⭐/); assert.match(aud, /Australia Labour Force \(AUD\)/); assert.doesNotMatch(aud, /U READY4|CLEAR POSISI/);
+  const usdMedium = formatCalendarMessage({ ...event, name: "US Durable Goods", url: "", impact: "medium" }, "WARNING", { meaning: "a", narrative: "b" });
+  assert.doesNotMatch(usdMedium, /U READY4/);
+  const usdHigh = formatCalendarMessage({ ...event, name: "US Nonfarm Payrolls", url: "" }, "WARNING", { meaning: "a", narrative: "b" });
+  assert.match(usdHigh, /U READY4 NEWSSSSS 🚨\n🇺🇸 AMERIKA SERIKAT \(USD\) — ⭐⭐⭐/);
+  assert.match(goldLinkNote("AUD"), /gak masuk hitungan DXY/);
+});
+
+test("US results become one institutional note: every print, revision, seven sections, under Telegram's limit", async () => {
+  const { formatCalendarDeep, printFacts } = await import("../dist/economic-calendar.js");
+  const base = { country: "US", releaseAt: "2026-10-14T12:30:00Z", impact: "high", url: "" };
+  const cpi = { ...base, id: "a", name: "Core CPI m/m", consensus: "0.3%", prior: "0.3%", actual: "0.4%" };
+  const yoy = { ...base, id: "b", name: "CPI y/y", consensus: "2.9%", prior: "2.9%", actual: "2.8%" };
+  const f = printFacts(cpi, { firstSeenForecast: "0.3%", firstSeenPrior: "0.2%" });
+  assert.equal(f.versus, "DI ATAS"); assert.equal(f.revisedPrior, "0.3%"); assert.equal(f.prior, "0.2%");
+  const long = "Kalimat analisa yang panjang dan lengkap. ".repeat(40);
+  const dive = { angka: long, kualitas: long, fed: long, transmisi: long, emas: long, risiko: long, berikutnya: long };
+  const msg = formatCalendarDeep([{ event: cpi, saved: { firstSeenPrior: "0.2%" } }, { event: yoy, saved: {} }], dive);
+  assert.ok(msg.length <= 4096, `length ${msg.length}`);
+  for (const t of ["Angka vs ekspektasi", "Kualitas dan detail data", "Implikasi untuk The Fed", "Transmisi ke dolar dan yield", "Dampak ke emas", "Yang bisa membalik", "Yang dipantau berikutnya"]) assert.match(msg, new RegExp(t));
+  assert.match(msg, /🇺🇸 AMERIKA SERIKAT \(USD\)/);
+  assert.match(msg, /Core CPI m\/m: <b>0\.4%<\/b> vs perkiraan 0\.3%.*di atas perkiraan.*direvisi 0\.2% → 0\.3%/);
+  assert.match(msg, /CPI y\/y: <b>2\.8%<\/b>.*di bawah perkiraan/);
+  assert.doesNotMatch(msg, /https?:|entry|stop loss/i);
+});
+
+test("an owner-critical US release with an empty country field still gets the pre-release warning", async () => {
+  const { dueStage, currencyOf } = await import("../dist/economic-calendar.js");
+  const { priorityOf } = await import("../dist/brain-events.js");
+  const e = { id: "c", name: "Initial Jobless Claims", country: "", releaseAt: "2026-09-24T12:30:00Z", consensus: "235K", prior: "196K", actual: null, impact: "medium",
+    url: "https://www.financecalendar.com/event/us-initial-jobless-claims-september-24-2026/" };
+  const upgraded = e.impact !== "high" && currencyOf(e) === "USD" && priorityOf(e.name) === "CRITICAL" ? { ...e, impact: "high" } : e;
+  assert.equal(upgraded.impact, "high");
+  assert.equal(dueStage(upgraded, Date.parse("2026-09-24T12:25:00Z"), {}), "WARNING");
 });
