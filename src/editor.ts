@@ -66,6 +66,15 @@ export function internalFrom(d: z.infer<typeof decisionSchema>): import("./brain
     evidenceFor: list(d.buktiPendukung), evidenceAgainst: list(d.buktiBertentangan), activation: text(d.kondisiAktivasi), invalidation: text(d.invalidasi),
     mainRisk: text(d.risikoUtama), nextCatalyst: text(d.katalisBerikutnya), marketAcceptance: text(d.alasanPasar), pastDifference: text(d.bedaDenganMasaLalu), narrative: text(d.narasiDominan) };
 }
+let lastOutageLog = 0;
+/** One loud log line per 10 minutes when the AI provider refuses calls (e.g. 429 no credits), so it is visible in Render. */
+function aiOutage(error: unknown): void {
+  const e = error as { status?: number; message?: string };
+  if (e?.status !== 429 && e?.status !== 401 && e?.status !== 403) return;
+  if (Date.now() - lastOutageLog < 600_000) return;
+  lastOutageLog = Date.now();
+  console.error(JSON.stringify({ level: 50, time: Date.now(), status: e.status, error: String(e.message ?? "").slice(0, 200), msg: "AI PROVIDER UNAVAILABLE: no news can be written until this is fixed" }));
+}
 export class AIContractFailure extends Error { constructor(message = "AI structured response invalid after repair retry") { super(message); this.name = "AIContractFailure"; } }
 // Additive recognition examples from the owner's XAU classifier. They inform
 // semantic judgment; they do not replace the existing publication contract.
@@ -183,9 +192,11 @@ export class Editor {
   async assess(article: NewsArticle): Promise<EditorialDecision> {
     let decision: z.infer<typeof decisionSchema>;
     try { decision = await this.structuredDecision(article); }
-    catch {
+    catch (first) {
+      // Out of credits / rate limit is not a schema problem: say so plainly instead of hiding it as a contract failure.
+      if ((first as { status?: number })?.status === 429) { aiOutage(first); throw new AIContractFailure(`AI unavailable: ${String((first as Error).message).slice(0, 120)}`); }
       try { decision = await this.structuredDecision(article, true); }
-      catch { throw new AIContractFailure(); }
+      catch (second) { aiOutage(second); throw new AIContractFailure(); }
     }
 
     if (decision.material && (!decision.judul?.trim() || !decision.ringkasan?.trim() || !decision.dampakEmas?.trim())) {

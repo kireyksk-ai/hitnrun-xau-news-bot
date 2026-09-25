@@ -29,6 +29,8 @@ export type PipelineDeps = {
   /** Optional: independent second check right before publishing (Market Brain). */
   /** Optional: owner-priority events (playbook) that must always reach Sol, even below the importance filter. */
   important?: (article: NewsArticle, event: EventAssessment) => boolean;
+  /** Optional: owner rule: an official's remark on policy/inflation/trade/war must be published once found (still deduplicated and source-checked). */
+  mustSend?: (article: NewsArticle, event: EventAssessment) => boolean;
   critic?: (article: NewsArticle, event: EventAssessment, primary: EditorialDecision | undefined, reason: string) => Promise<import("./brain-episodes.js").CriticResult>;
   now?: () => Date;
 };
@@ -109,7 +111,8 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   let record: ReviewRecord = { id: event.key, article, event, stage: "SCORE", primaryDecision: "REVIEW",
     reason: event.reasons.join("; "), audit: auditBase };
   deps.store.record(record);
-  if (!shouldReview(event, prior) && !deps.important?.(article, event)) {
+  const must = Boolean(deps.mustSend?.(article, event));
+  if (!must && !shouldReview(event, prior) && !deps.important?.(article, event)) {
     const reason = event.candidateRoute === "OBVIOUS_NOISE" ? "OBVIOUS_NOISE_DROP: No plausible macro/XAU transmission" : "HARD_FILTER_REJECT: Importance/delta below threshold";
     record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason, audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
     deps.store.observeMarketEvent(article, event);
@@ -165,6 +168,14 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     const actor = article.author ?? article.sourceMeta?.authorId;
     for (const horizon of policy(event.storyKey,event.marketMateriality)) for (const checkpoint of schedule(event.key,event.storyKey,nowIso,event.marketMateriality,horizon,event.storyKey,{source:article.sourceName ?? article.provider,actor,factualState,causalReference:event.storyKey,causalGraphVersion:nowIso})) deps.store.scheduleCheckpoint(checkpoint);
   }
+  // Cost rule (2026-09-25): a single tier-3 source can never be published without an independent trusted copy,
+  // and that copy is judged fresh when it arrives. Judging the tier-3 copy with AI only burned money
+  // (~40% of daily calls), so it is held for corroboration without AI. Sent-output quality is unchanged.
+  if (event.sourceTier > 2) {
+    record = { ...record, stage: "SOURCE", primaryDecision: "REVIEW", reason: must ? "Tier-3 official remark waits for a trusted copy" : "Tier-3 source needs independent corroboration", audit: { ...auditBase, outcome: "INTELLIGENCE_NOT_MATERIAL" } };
+    deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.rememberEvidence(article, event, false); deps.store.increment("unverifiedRejected");
+    return record;
+  }
 
   let primary: EditorialDecision | undefined;
   let shadow: { material: boolean; score: number; reason: string } | undefined;
@@ -176,7 +187,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   if (!primary?.material) try { shadow = await deps.shadow(enriched, event); }
   catch { deps.store.increment("aiFailures"); }
   if (contractFailure) {
-    const reason = shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";
+    const reason = must ? "AI_CONTRACT_FAILURE: official remark queued; AI unavailable" : shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";
     record = { ...record, stage: "AI_CONTRACT_FAILURE", primaryDecision: "REVIEW", reason,
       shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
       audit: { ...auditBase, aiCalled: true, schema: "INVALID", repairAttempted: true, fallbackAttempted: true, outcome: "AI_CONTRACT_FAILURE" } };
@@ -196,9 +207,11 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // A plausible macro candidate reaches Sol without a keyword-built channel.
   // It may publish only when trusted-source Sol evidence supports it.
   const plausiblePublish = corroborated && event.candidateRoute === "PLAUSIBLE_MACRO" && aiSupports;
-  const publish = deterministicPublish || plausiblePublish;
+  // Owner rule: an official remark from a trusted source goes out even when Sol calls it minor; Sol still writes the text.
+  const forced = must && corroborated && !deterministicPublish && !plausiblePublish;
+  const publish = deterministicPublish || plausiblePublish || forced;
   record = { ...record, brain: { internal: primary?.internal }, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
-    reason: primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
+    reason: forced ? `OFFICIAL_REMARK_MUST_SEND; ${primary?.reason ?? "Primary AI unavailable"}` : primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
     audit: { ...auditBase, aiCalled: true, schema: "VALID", fallbackAttempted: true, outcome: publish ? "PENDING" : "INTELLIGENCE_NOT_MATERIAL" } };
   if (!corroborated) {
     record = { ...record, stage: "SOURCE", primaryDecision: "REVIEW", reason: "Tier-3 source needs independent corroboration" };

@@ -188,6 +188,24 @@ export function speakerOf(name: string): string | null {
   if (/BOJ Press Conference|BOJ Gov/i.test(name)) return "Ueda";
   return null;
 }
+const BANK: Record<string, string> = { USD: "Fed", EUR: "ECB", GBP: "BoE", JPY: "BoJ", CAD: "BoC", AUD: "RBA", NZD: "RBNZ", CHF: "SNB", CNY: "PBOC" };
+/** Search words a newsroom would actually print: "Fed Schmid", not the calendar's "FOMC Member Schmid Speaks". */
+export function huntQuery(event: CalendarEvent): { query: string; minutes: number; everySeconds: number } {
+  const cur = currencyOf(event);
+  if (isSpeech(event)) {
+    const who = speakerOf(event.name);
+    if (who) return { query: `${BANK[cur] ?? ""} ${who}`.trim(), minutes: 180, everySeconds: 120 };
+  }
+  const core = event.name.replace(/\b(m\/m|y\/y|q\/q|flash|prelim(?:inary)?|final|revised)\b/gi, " ").replace(/\s+/g, " ").trim();
+  return { query: `"${core}"${cur === "USD" ? " US" : ""}`, minutes: 25, everySeconds: 60 };
+}
+/** Closing note when a warned speech produced no reported new line, so a warning is never left hanging. */
+export function formatSpeechQuiet(event: CalendarEvent): string {
+  const cur = currencyOf(event), where = countryTag(cur, event.country);
+  return [`<b>📰 HASIL ${where}</b>`, `<b>${escapeHtml(event.name)}</b> — ${formatWib(event.releaseAt)}`,
+    "Pidato sudah lewat dan sampai sekarang belum ada pernyataan baru soal suku bunga atau inflasi yang terlapor.",
+    "Artinya pidato ini belum mengubah gambaran untuk emas; arah tetap mengikuti data dan berita utama berikutnya."].join("\n\n");
+}
 export function formatSpeechResult(event: CalendarEvent, explanation: { meaning: string; narrative: string }, headlines: number): string {
   const cur = currencyOf(event), where = countryTag(cur, event.country);
   return [`<b>📰 HASIL ${where}${event.impact === "high" ? " ⭐⭐⭐" : ""}</b>`, `<b>${escapeHtml(event.name)}</b> — ${formatWib(event.releaseAt)}`,

@@ -14,6 +14,8 @@ import { TruthSocialTrumpProvider } from "./providers/truth-social.js";
 import { TreasuryPressProvider } from "./providers/treasury-press.js";
 import { TwitterWireProvider } from "./providers/twitter-wire.js";
 import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
+import { InvestingLiveProvider } from "./providers/investinglive.js";
+import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
 import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
@@ -31,7 +33,7 @@ import { mustReview, priorityOf } from "./brain-events.js";
 import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind, recapSince, SESSION } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
-import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatSpeechResult, formatWib, goldLinkNote, isSpeech, printFacts, speakerOf, type CalendarEvent } from "./economic-calendar.js";
+import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatSpeechQuiet, formatSpeechResult, formatWib, goldLinkNote, isSpeech, printFacts, speakerOf, type CalendarEvent } from "./economic-calendar.js";
 import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
 import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
 import { parseRss } from "./brain-hunter.js";
@@ -53,6 +55,7 @@ const providers: NewsProvider[] = [
   ...(config.TREASURY_PRESS_ENABLED ? [new TreasuryPressProvider(config.TREASURY_PRESS_POLL_SECONDS)] : []),
   ...(config.TWITTER_WIRE_ENABLED && config.X_API_BEARER_TOKEN ? [new TwitterWireProvider(config.TWITTER_WIRE_POLL_SECONDS, config.TWITTER_WIRE_MAX_MONTHLY_USD)] : []),
   ...(config.BENZINGA_API_KEY ? [new BenzingaWireProvider(config.BENZINGA_API_KEY, config.BENZINGA_POLL_SECONDS)] : []),
+  ...(config.INVESTINGLIVE_ENABLED ? [new InvestingLiveProvider(config.INVESTINGLIVE_POLL_SECONDS)] : []),
   ...(config.FXMACRODATA_API_KEY ? [new FxMacroDataProvider(config.FXMACRODATA_API_KEY, config.FXMACRODATA_POLL_SECONDS)] : [])
 ];
 if (!providers.length) throw new Error("No news provider configured");
@@ -330,7 +333,16 @@ async function speechResults(): Promise<void> {
     const from = Date.parse(event.releaseAt) - 15 * 60_000, re = new RegExp(`\\b${speaker}\\b`, "i");
     const titles = [...new Set(archive.filter((a) => re.test(a.item.title ?? "") && Date.parse(a.item.publishedAt ?? a.fetchedAt) >= from).map((a) => (a.item.title ?? "").trim()))].slice(0, 12);
     const age = now - Date.parse(event.releaseAt);
-    if (!titles.length) { if (age > 3.5 * 3_600_000) log.info({ event: event.name, speaker }, "Speech result skipped: no headlines"); continue; }
+    if (!titles.length) {
+      // Never leave a warning hanging: after 3h with no reported line (hunted on Google News, wires and investingLive), close it honestly.
+      if (age < 3 * 3_600_000) continue;
+      const waiting = destinations.filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
+      if (!waiting.length) continue;
+      const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, waiting, formatSpeechQuiet(event), store);
+      if (Object.keys(accepted).length) { calendarLedger.mark(event.id, "ACTUAL", accepted); recentSendTimes.push(Date.now()); }
+      log.info({ event: event.name, speaker, accepted: Object.keys(accepted).length }, "Speech closed: no new remarks reported");
+      continue;
+    }
     // Give the wires time to publish more than one line unless the talk is already well past.
     if (titles.length < 2 && age < 60 * 60_000) continue;
     const currency = currencyOf(event);
@@ -349,6 +361,29 @@ async function speechResults(): Promise<void> {
   }
 }
 let lastSpeechScan = 0;
+/** Owner rule: official remarks on policy, prices, trade or war must be published. Capped per hour so a burst can never trip safe mode. */
+const forcedAt: number[] = [];
+function mustSendRemark(item: import("./types.js").NewsArticle): boolean {
+  if (!officialRemark(item)) return false;
+  const now = Date.now();
+  while (forcedAt.length && now - forcedAt[0] > 3_600_000) forcedAt.shift();
+  if (forcedAt.length >= config.OFFICIAL_REMARKS_MAX_PER_HOUR) { log.warn({ title: item.title.slice(0, 120) }, "Official remark over hourly cap; normal judgment applies"); return false; }
+  forcedAt.push(now);
+  return true;
+}
+/** Every official remark seen by any provider in the last `hours`, sent or not, for Sol and the briefings. Cached 60s. */
+let remarksCache = { at: 0, key: "", text: "" };
+function officialContext(hours: number, max: number): string {
+  const now = Date.now(), key = `${hours}|${max}`;
+  if (remarksCache.key === key && now - remarksCache.at < 60_000) return remarksCache.text;
+  let text = "";
+  try {
+    const archive = readArchive(`${config.SQLITE_PATH}.raw`, new Date(now), hours > 20 ? 3 : 2).map((a) => ({ ...a.item, fetchedAt: a.fetchedAt }));
+    text = remarksBlock(remarksDigest(archive, now - hours * 3_600_000, max), `UCAPAN PEJABAT ${hours} JAM TERAKHIR`);
+  } catch (error) { log.warn({ err: error }, "Official remarks digest failed"); }
+  remarksCache = { at: now, key, text };
+  return text;
+}
 function jakartaDayAndHour(date = new Date()): { day: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta",
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false }).formatToParts(date);
@@ -480,6 +515,7 @@ async function tick(): Promise<void> {
             deliver,
             compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
             onSent: recordPrediction,
+            mustSend: (item) => mustSendRemark(item),
             important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
             facts: async (item) => ({
               page: needsFacts(item.title, item.summary) ? await fetchFacts(item.url).catch(() => "") : "",
@@ -489,7 +525,7 @@ async function tick(): Promise<void> {
             critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
             sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
               .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
-              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
+              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", officialContext(6, 15), candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
           });
           try { await rememberOutcome(result); } catch (error) { log.warn({ err: error }, "Outcome memory failed"); }
           try { await brain?.onResult(result); } catch (error) { log.warn({ err: error }, "Brain episode failed"); }
@@ -535,7 +571,8 @@ async function briefingTick(): Promise<void> {
     for (let attempt = 0; attempt < 2 && !checked.ok; attempt++) {
       // The retry is told exactly why the first draft was rejected, instead of repeating the same prompt.
       const retryNote = attempt && !checked.ok ? `\n\nDRAF SEBELUMNYA DITOLAK (${checked.reason}). Tulis ulang lebih ringkas: maksimal ${SESSION[kind].words} kata, patuhi semua aturan di atas.` : "";
-      checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input) + retryNote));
+      const remarks = officialContext(hours, 25);
+      checked = validateBriefing(await briefingEditor.briefing(briefingPrompt(input) + (remarks ? `\n\n${remarks}` : "") + retryNote));
       if (!checked.ok) log.warn({ kind, attempt, reason: checked.reason }, "Briefing draft rejected; retrying");
     }
     // Mark first: a failed briefing is skipped for the day instead of retried every few seconds.

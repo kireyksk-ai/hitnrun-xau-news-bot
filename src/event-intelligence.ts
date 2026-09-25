@@ -62,7 +62,7 @@ export function sourceTier(article: NewsArticle): SourceTier {
     /^https:\/\/x\.com\/[A-Za-z0-9_]+\/status\/\d+/i.test(article.url)) return 2;
   const source = `${article.sourceName ?? ""} ${article.provider}`.toLowerCase();
   if (/federal reserve|treasury|white house|bureau of labor|bea|eia|central bank|government|truth social/.test(source)) return 1;
-  if (/reuters|bloomberg|associated press|financial times|benzinga|firstsquawk|livesquawk|deltaone|wall street journal|\bwsj\b|cnbc|marketwatch|barron'?s|nikkei|s&p global/.test(source)) return 2;
+  if (/reuters|bloomberg|associated press|financial times|benzinga|investinglive|firstsquawk|livesquawk|deltaone|wall street journal|\bwsj\b|cnbc|marketwatch|barron'?s|nikkei|s&p global/.test(source)) return 2;
   return 3;
 }
 export function classifyChange(text: string): ChangeType {
