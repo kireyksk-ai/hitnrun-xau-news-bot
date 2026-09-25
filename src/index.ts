@@ -36,6 +36,7 @@ import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
 import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
 import { parseRss } from "./brain-hunter.js";
 import { Backtest } from "./brain-backtest.js";
+import { CandleLab } from "./candle-lab.js";
 import { ActualCapture, type Captured } from "./calendar-actuals.js";
 import { sourceTier } from "./event-intelligence.js";
 import { calendarEcho, type PostedRelease } from "./pipeline.js";
@@ -94,6 +95,9 @@ const rawArchive = new RawArchive(`${config.SQLITE_PATH}.raw`);
 const backtest = config.BACKTEST_ENABLED ? new Backtest(`${config.SQLITE_PATH}.backtest`, config.FRED_API_KEY, config.BACKTEST_YEARS) : undefined;
 let backtestBusy = false;
 if (backtest) setInterval(() => { if (backtestBusy) return; backtestBusy = true; void backtest.step().catch((error) => log.warn({ err: error }, "Backtest step crashed")).finally(() => { backtestBusy = false; }); }, 20_000);
+const candleLab = config.CANDLE_LAB_ENABLED ? new CandleLab(`${config.SQLITE_PATH}.candles`, () => store.records().filter((r) => r.stage === "SENT" && r.sentAt).map((r) => Date.parse(r.sentAt!)), config.CANDLE_LAB_LEARN_DAYS) : undefined;
+let candleBusy = false;
+if (candleLab) setInterval(() => { if (candleBusy) return; candleBusy = true; void candleLab.tick().catch((error) => log.warn({ err: error }, "Candle lab tick failed")).finally(() => { candleBusy = false; }); }, 60_000);
 const briefings = new BriefingLedger(`${config.SQLITE_PATH}.briefings.json`);
 let briefingBusy = false; const briefingFailures = new Map<string, number>();
 let priceCache: { at: number; price?: number } = { at: 0 };
@@ -372,6 +376,7 @@ async function pollAdmin(): Promise<void> {
         const query = input.slice(5).trim();
         await reply(formatTrace(query, traceHeadline(query, readArchive(`${config.SQLITE_PATH}.raw`), store.records())).slice(0, 3900));
       }
+      else if (input === "/candle") await reply((candleLab?.status() ?? "Candle lab nonaktif").slice(0, 3900));
       else if (input === "/backtest") await reply((backtest?.status() ?? "Backtest nonaktif").slice(0, 3900));
       else if (input === "/corong") await reply(formatFunnel(funnel(new Date().toISOString().slice(0, 10), readArchive(`${config.SQLITE_PATH}.raw`), store.records())).slice(0, 3900));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
@@ -443,7 +448,7 @@ async function tick(): Promise<void> {
             critic: brain && config.BRAIN_CRITIC_ENABLED ? (item, event, primary, reason) => brain.critic(item, event, primary, reason, aiAllowed(event.sourceTier)) : undefined,
             sequence: (event, item) => [sequenceContext(store.records().filter((r) => r.stage === "SENT" && r.sentAt)
               .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
-              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? ""].filter(Boolean).join("\n\n")
+              { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
           });
           try { await rememberOutcome(result); } catch (error) { log.warn({ err: error }, "Outcome memory failed"); }
           try { await brain?.onResult(result); } catch (error) { log.warn({ err: error }, "Brain episode failed"); }

@@ -33,6 +33,10 @@ export function validateNewsOutput(message: string, article: NewsArticle): Outpu
   if (/\b(importance|urgency|new_information|source scoring|reasoning internal|score\s*\d+\s*\/\s*100|level dampak|bias dampak)\b/i.test(visible)) {
     return { ok: false, reason: "Internal metadata leaked into NEWS" };
   }
+  // Candle Lab / pattern memory / market structure are the bot's private reasoning: never quoted to the groups.
+  if (/BELUM DINILAI|uji-maju|hafalan|TERBUKTI beda|dicurigai:|tanda jebakan|candle konfirmasi|keyakinan:\s*(?:TINGGI|SEDANG|RENDAH)|\bn=\d+|PENGALAMAN CANDLE|\b(?:M5|M15|H1|H4)\b/i.test(visible)) {
+    return { ok: false, reason: "Internal candle reasoning leaked into NEWS" };
+  }
   // The Market Brain's internal action (BUY/SELL/WAIT/NO_TRADE) must never reach the groups.
   if (/\b(?:BUY|SELL|NO[_ -]TRADE)\b|keputusan internal|keputusanInternal/.test(visible)) return { ok: false, reason: "Internal brain action leaked into NEWS" };
   if (/https?:\/\/|www\.|\b(?:Reuters|Bloomberg|Politico|Truth Social)\s*[:—-]/i.test(visible)) return { ok: false, reason: "Raw source attribution or link in NEWS" };

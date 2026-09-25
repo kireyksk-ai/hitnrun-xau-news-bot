@@ -29,6 +29,9 @@ const schema = z.object({
     // Five-year statistical backtest (no GPT). FRED_API_KEY (free) unlocks US release history.
     BACKTEST_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     BACKTEST_YEARS: z.coerce.number().int().min(1).max(10).default(5),
+    // Candle Lab: records gold OHLC 24/7, replays walk-forward, live predictions from day LEARN_DAYS+1 (measurement only).
+    CANDLE_LAB_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+    CANDLE_LAB_LEARN_DAYS: z.coerce.number().int().min(1).max(60).default(7),
     FRED_API_KEY: z.string().optional().transform((value) => value?.trim() || undefined),
     BRIEFING_EUROPE_LONDON: z.string().regex(/^\d{2}:\d{2}$/).default("07:30"),
     BRIEFING_US_NEWYORK: z.string().regex(/^\d{2}:\d{2}$/).default("08:00"),
