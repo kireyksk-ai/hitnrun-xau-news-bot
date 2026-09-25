@@ -30,7 +30,10 @@ test("WIB conversion and 10-minute warning window", () => {
   const medium = { ...event, impact: "medium", actual: "56.1" };
   assert.equal(dueStage(medium, t - 9 * 60000, {}, ["a"]), null);
   // Results follow what was warned (or high impact) and only while fresh, so a new actual source cannot flood the group.
-  assert.equal(dueStage(medium, t + 60000, { releaseAt }, ["a"]), null, "minor print that was never warned");
+  // A US medium print (e.g. Michigan sentiment) always gets its result; a non-US medium print needs a warning first.
+  assert.equal(dueStage({ ...medium, name: "Revised UoM Consumer Sentiment", country: "USD", url: "" }, t + 60000, { releaseAt }, ["a"]), "ACTUAL");
+  assert.equal(dueStage({ ...medium, name: "German Ifo", country: "EUR", url: "" }, t + 60000, { releaseAt }, ["a"]), null, "non-US minor print that was never warned");
+  assert.equal(dueStage({ ...medium, impact: "low", country: "USD", url: "" }, t + 60000, { releaseAt }, ["a"]), null, "low impact never");
   assert.equal(dueStage(medium, t + 60000, { releaseAt, warnedTo: { a: 1 } }, ["a"]), "ACTUAL");
   assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 5 * 3600000, { releaseAt }, ["a"]), "ACTUAL");
   assert.equal(dueStage({ ...event, actual: "4.7%" }, t + 7 * 3600000, { releaseAt }, ["a"]), null, "stale result");

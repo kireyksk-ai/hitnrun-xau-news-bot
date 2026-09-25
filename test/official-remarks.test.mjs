@@ -94,3 +94,11 @@ test("a candidate lost to an AI outage is judged again once AI is back", async (
   const up = await processArticle(article, { ...base, analyze: async () => ({ material: false, confidence: "low", reason: "minor", telegramMessage: null }), shadow: async () => ({ material: false, score: 10, reason: "minor" }) });
   assert.equal(up.stage, "SENT"); assert.equal(sent.length, 1);
 });
+
+test("roundups are not remarks, and consumer sentiment news reaches Sol", async () => {
+  assert.equal(officialRemark({ title: "Trump: 'Productive' Xi Meeting, Consumer Sentiment Falls, More - Bloomberg.com", summary: "" }), undefined);
+  const { assessEvent } = await import("../dist/event-intelligence.js");
+  const e = assessEvent({ provider: "google-news-rss", providerId: "cs", sourceName: "Bloomberg", url: "https://bloomberg.com/x",
+    title: "US Consumer Sentiment Falls on Concerns About Prices, Economy - Bloomberg.com", summary: "", publishedAt: new Date() });
+  assert.notEqual(e.candidateRoute, "OBVIOUS_NOISE");
+});
