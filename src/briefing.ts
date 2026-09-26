@@ -66,7 +66,8 @@ export function dueBriefing(now: Date, schedule: BriefingSchedule, sentToday: Pa
   const j = jakarta(now);
   const slots = sessionSlots(j.day, schedule);
   const open = (kind: BriefingKind) => now.getTime() >= slots[kind] && now.getTime() < slots[kind] + 20 * 60_000 && sentToday[kind] !== j.day;
-  if (j.weekday >= 1 && j.weekday <= 6 && open("ASIA")) return "ASIA";
+  // Owner rule (2026-09-26): no briefings on Saturday or Sunday; Monday Asia recaps the weekend.
+  if (j.weekday >= 1 && j.weekday <= 5 && open("ASIA")) return "ASIA";
   if (j.weekday >= 1 && j.weekday <= 5 && open("EROPA")) return "EROPA";
   if (j.weekday >= 1 && j.weekday <= 5 && open("US")) return "US";
   return null;

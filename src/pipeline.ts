@@ -210,8 +210,11 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // It may publish only when trusted-source Sol evidence supports it.
   const plausiblePublish = corroborated && event.candidateRoute === "PLAUSIBLE_MACRO" && aiSupports;
   // Owner rule: an official remark from a trusted source goes out even when Sol calls it minor; Sol still writes the text.
-  const forced = must && corroborated && !deterministicPublish && !plausiblePublish;
-  const publish = deterministicPublish || plausiblePublish || forced;
+  // Owner rule (2026-09-26): when Sol itself calls the item a repeat / no new fact, nothing overrides that verdict
+  // (not the shadow reviewer, not the official-remark rule). Repeats were flooding the groups.
+  const saysRepeat = /\bREPEAT\b|pengulangan|ngulang|bukan (?:fakta|info|informasi|berita) baru|(?:tidak|gak|gk|nggak) ada (?:fakta|info|informasi|hal) baru|no new (?:fact|information)/i.test(primary?.reason ?? "");
+  const forced = must && corroborated && !deterministicPublish && !plausiblePublish && !saysRepeat;
+  const publish = (deterministicPublish || plausiblePublish || forced) && !saysRepeat;
   record = { ...record, brain: { internal: primary?.internal }, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
     reason: forced ? `OFFICIAL_REMARK_MUST_SEND; ${primary?.reason ?? "Primary AI unavailable"}` : primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,
     audit: { ...auditBase, aiCalled: true, schema: "VALID", fallbackAttempted: true, outcome: publish ? "PENDING" : "INTELLIGENCE_NOT_MATERIAL" } };
@@ -261,6 +264,10 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     return record;
   }
   let newsMessage = message;
+  // Importance marker instead of the same ⚠️ on every post, so members can tell big news from context:
+  // 🔴 market-moving, 🟡 worth knowing, ⚪ context/update (official remark Sol rated minor).
+  const marker = forced ? "⚪" : (event.highPriority || (primary?.material && primary.confidence === "high") || event.marketMateriality >= 85) ? "🔴" : "🟡";
+  newsMessage = newsMessage.replace(/^(<b>)?⚠️/, (_m, b) => `${b ?? ""}${marker}`);
   const releaseDup = deps.releaseEcho?.(article);
   if (releaseDup) {
     deps.store.increment("duplicatesRemoved"); deps.store.markProcessedIdentity(article, event.key);

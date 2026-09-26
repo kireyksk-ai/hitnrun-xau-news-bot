@@ -17,6 +17,7 @@ import { TwitterWireProvider } from "./providers/twitter-wire.js";
 import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
 import { InvestingLiveProvider } from "./providers/investinglive.js";
 import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.js";
+import { formatRecap, recapDue } from "./recap.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
 import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
@@ -496,6 +497,7 @@ async function tick(): Promise<void> {
       catch (error) { log.warn({ err: error }, "Shadow market observer failed"); }
     }
     try { await replayAiFailures(); } catch (error) { log.warn({ err: error }, "AI outage replay failed"); }
+    try { await recapTick(); } catch (error) { log.warn({ err: error }, "News recap failed"); }
     const since = new Date(Date.now() - config.MAX_ARTICLE_AGE_MINUTES * 60000);
     for (const provider of providers) {
       const now = Date.now();
@@ -577,6 +579,19 @@ async function replayAiFailures(): Promise<void> {
     } catch (error) { log.warn({ err: error, id: r.id }, "Replay after AI outage failed"); }
   }
   if (replayTries.size > 500) for (const [k, v] of replayTries) if (now - v.at > 3 * 3_600_000) replayTries.delete(k);
+}
+/** Catch-up digest after a run of NEWS posts (no AI; headlines already posted). */
+const recapPath = `${config.SQLITE_PATH}.recap.json`;
+let lastRecapAt = (() => { try { return Number(JSON.parse(readFileSync(recapPath, "utf8")).at) || Date.now(); } catch { return Date.now(); } })();
+async function recapTick(): Promise<void> {
+  if (store.safeMode) return;
+  const sent = store.records().filter((r) => r.stage === "SENT" && r.sentAt && r.renderedMessage).map((r) => ({ sentAt: r.sentAt!, message: r.renderedMessage! }));
+  const due = recapDue(sent, lastRecapAt, Date.now());
+  if (!due) return;
+  lastRecapAt = Date.now();
+  try { writeFileSync(recapPath, JSON.stringify({ at: lastRecapAt })); } catch { /* best effort */ }
+  const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, formatRecap(due), store);
+  log.info({ items: due.length, accepted: Object.keys(accepted).length }, "News recap sent");
 }
 /** Morning / 21:00 WIB desk briefing: recap + what to watch. One AI call each, outside the per-article budget. */
 async function briefingTick(): Promise<void> {
