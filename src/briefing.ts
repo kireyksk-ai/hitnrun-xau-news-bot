@@ -61,7 +61,7 @@ export function zonedTime(day: string, clock: string, timeZone: string): number 
 export function sessionSlots(day: string, schedule: BriefingSchedule): Record<BriefingKind, number> {
   return { ASIA: zonedTime(day, schedule.asiaWib, "Asia/Jakarta"), EROPA: zonedTime(day, schedule.europeLondon, "Europe/London"), US: zonedTime(day, schedule.usNewYork, "America/New_York") };
 }
-/** Asia: Mon–Sat (Saturday recaps Friday's NY). Europe and US: Mon–Fri. Window of 20 minutes after each slot. */
+/** All sessions: Mon–Fri only. Window of 20 minutes after each slot. */
 export function dueBriefing(now: Date, schedule: BriefingSchedule, sentToday: Partial<Record<string, string>>): BriefingKind | null {
   const j = jakarta(now);
   const slots = sessionSlots(j.day, schedule);
@@ -138,7 +138,9 @@ export function validateBriefing(text: string): { ok: true; text: string } | { o
   // The character cap is the real Telegram limit; the word cap only stops runaway essays.
   if (words < 60 || words > 560 || visible.length > 3800) return { ok: false, reason: `briefing length ${words} words` };
   if (/https?:\/\/|www\./i.test(visible)) return { ok: false, reason: "link in briefing" };
-  if (/\b(sources?|sumber\s*:|bot|AI)\b/.test(visible) || /\b(sources?|sumber\s*:)/i.test(visible)) return { ok: false, reason: "source list or bot/AI mention in briefing" };
+  // "AI" can be a real macro driver (AI investment), and "source" can be ordinary
+  // prose. Reject disclosure of the bot/AI author and explicit source lists only.
+  if (/\b(?:sources?|sumber)\s*:/i.test(visible) || /\bbot\b|\b(?:sebagai|oleh|dari)\s+AI\b/i.test(visible)) return { ok: false, reason: "source list or bot/AI mention in briefing" };
   if (/\b(entry|stop ?loss|take profit|zona (?:buy|sell)|buy di|sell di|target harga|pasti naik|pasti turun|dijamin)\b/i.test(visible) || /\b(TP|SL)\b/.test(visible)) return { ok: false, reason: "trading instruction or guarantee in briefing" };
   if (!/\b(emas|gold|xau)\b/i.test(visible)) return { ok: false, reason: "briefing does not discuss gold" };
   // Escape everything, then restore <b> only when balanced, so Telegram HTML parsing never fails.
