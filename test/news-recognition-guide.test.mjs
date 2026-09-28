@@ -32,14 +32,16 @@ test("additive news recognition reaches both Sol judgments without changing outp
   assert.equal(calls[0].model, "gpt-5.6-sol");
   assert.equal(calls[0].reasoning.effort, "medium");
   assert.equal(calls[0].text.format.type, "json_schema");
-  assert.match(calls[0].input[0].content, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
-  assert.match(calls[0].input[0].content, /ADDITIONAL SOURCE MEMORY GUIDE/);
-  assert.match(calls[0].input[0].content, /ADDITIONAL CATALYST REASONING MEMORY/);
-  assert.match(calls[0].input[0].content, /When material=true, write ONLY three clean fields/);
-  assert.match(calls[1].input[0].content, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
-  assert.match(calls[1].input[0].content, /ADDITIONAL SOURCE MEMORY GUIDE/);
-  assert.match(calls[1].input[0].content, /ADDITIONAL CATALYST REASONING MEMORY/);
-  assert.match(calls[1].input[0].content, /Return JSON only: \{material:boolean, score:integer 0-100, reason:string\}/);
+  assert.equal(calls[0].prompt_cache_options.mode, "explicit");
+  assert.deepEqual(calls[0].input[0].content[0].prompt_cache_breakpoint, { mode: "explicit" });
+  assert.match(calls[0].input[0].content[0].text, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
+  assert.match(calls[0].input[0].content[0].text, /ADDITIONAL SOURCE MEMORY GUIDE/);
+  assert.match(calls[0].input[0].content[0].text, /ADDITIONAL CATALYST REASONING MEMORY/);
+  assert.match(calls[0].input[0].content[0].text, /When material=true, write ONLY three clean fields/);
+  assert.match(calls[1].input[0].content[0].text, /ADDITIONAL XAU NEWS RECOGNITION GUIDE/);
+  assert.match(calls[1].input[0].content[0].text, /ADDITIONAL SOURCE MEMORY GUIDE/);
+  assert.match(calls[1].input[0].content[0].text, /ADDITIONAL CATALYST REASONING MEMORY/);
+  assert.match(calls[1].input[0].content[0].text, /Return JSON only: \{material:boolean, score:integer 0-100, reason:string\}/);
 });
 
 test("incomplete material verdict gets one prose repair without changing its judgment", async () => {

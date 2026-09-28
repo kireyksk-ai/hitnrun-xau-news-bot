@@ -147,12 +147,15 @@ test("macro memory keeps the release state and repeated report is rejected", asy
 test("Musalem malformed Sol response is an AI contract failure, not an intelligence rejection", async () => {
   const { AIContractFailure } = await import("../dist/editor.js");
   const { deps, deliveries, article } = setup(null, { material: true, score: 91, reason: "Fed hike guidance is material" });
+  let shadowCalls = 0;
   deps.analyze = async () => { throw new AIContractFailure(); };
+  deps.shadow = async () => { shadowCalls++; return { material: true, score: 91, reason: "new" }; };
   const result = await processArticle(article("Fed's Musalem says more rate hikes likely needed to quell inflation"), deps);
   assert.equal(result.stage, "AI_CONTRACT_FAILURE");
   assert.equal(result.primaryDecision, "REVIEW");
   assert.match(result.reason, /AI_CONTRACT_FAILURE/);
   assert.equal(result.audit?.schema, "INVALID"); assert.equal(deliveries.length, 0);
+  assert.equal(shadowCalls, 0, "quota/schema failure must not trigger a second billed judgment");
 });
 
 test("Goolsbee and Hormuz incident fixtures reach the evaluator", async () => {
