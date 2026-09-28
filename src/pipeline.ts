@@ -186,7 +186,9 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   catch (error) { deps.store.increment("aiFailures"); contractFailure = error instanceof AIContractFailure; }
   // The shadow review exists to catch primary misses. When the primary already
   // approved the event, a second call adds no protection and only burns budget.
-  if (!primary?.material) try { shadow = await deps.shadow(enriched, event); }
+  // A quota/outage failure is not a negative editorial verdict. A second Sol
+  // request cannot improve it and doubles the failed-call traffic.
+  if (!contractFailure && !primary?.material) try { shadow = await deps.shadow(enriched, event); }
   catch { deps.store.increment("aiFailures"); }
   if (contractFailure) {
     const reason = must ? "AI_CONTRACT_FAILURE: official remark queued; AI unavailable" : shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";

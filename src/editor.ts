@@ -10,6 +10,22 @@ import type { DeepDive } from "./economic-calendar.js";
 import { MACRO_GUIDE } from "./brain-macro.js";
 import type { CriticResult, InternalAssessment } from "./brain-episodes.js";
 
+// GPT-5.6's implicit cache stops after the changing article. Mark only the
+// stable editorial instructions so new headlines reuse the same prefix without
+// caching article facts. Other models keep their existing request shape.
+export function reusableEditorialPrompt(model: string, guide: string, article: string) {
+  if (!/^gpt-5\.6(?:-|$)/.test(model)) return {
+    input: [{ role: "developer", content: guide }, { role: "user", content: article }]
+  };
+  return {
+    prompt_cache_options: { mode: "explicit" },
+    input: [
+      { role: "developer", content: [{ type: "input_text", text: guide, prompt_cache_breakpoint: { mode: "explicit" } }] },
+      { role: "user", content: article }
+    ]
+  };
+}
+
 // The AI occasionally returns a valid-but-incomplete JSON object. Treat that
 // as a safe rejection instead of throwing, otherwise the same article is
 // repeatedly retried and wastes both AI calls and provider quota.
@@ -186,8 +202,8 @@ export class Editor {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
       text: { format: { type: "json_schema", name: "market_editor_decision", strict: true, schema: decisionJsonSchema } } as never,
-      input: [{ role: "developer", content: repair ? `Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts in the voice below, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text.\n\n${HITNRUN_VOICE_GUIDE}` : `${instructions}\n\n${HITNRUN_VOICE_GUIDE}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}\n\n${EXPERIENCE_GUIDE}\n\n${MACRO_GUIDE}\n\n${INTERNAL_DECISION_GUIDE}` }, { role: "user", content: JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article) }]
-    });
+      ...reusableEditorialPrompt(this.model, repair ? `Repair only: return the exact required JSON schema for this already-evaluated article. Preserve material, confidence and reason from the supplied decision. If material=true, complete all three Indonesian NEWS prose fields from the article facts in the voice below, and if potensiArah is null also set potensiArah, keyakinan (50-90) and horizonJam (1, 4 or 24) as a potential only, never trading advice. Do not invent facts, change the materiality judgment, or paste source text.\n\n${HITNRUN_VOICE_GUIDE}` : `${instructions}\n\n${HITNRUN_VOICE_GUIDE}\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}\n\n${EXPERIENCE_GUIDE}\n\n${MACRO_GUIDE}\n\n${INTERNAL_DECISION_GUIDE}`, JSON.stringify(incomplete ? { article, priorDecision: incomplete } : article))
+    } as never);
     return decisionSchema.parse(JSON.parse(response.output_text));
   }
   async assess(article: NewsArticle): Promise<EditorialDecision> {
@@ -240,11 +256,8 @@ export class Editor {
   async shadowAssess(article: NewsArticle, event: EventAssessment, prior?: StoryState): Promise<{ material: boolean; score: number; reason: string }> {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
-      input: [
-        { role: "developer", content: `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}` },
-        { role: "user", content: JSON.stringify({ article, event, prior }) }
-      ]
-    });
+      ...reusableEditorialPrompt(this.model, `Independently evaluate whether this newly discovered market event merits an XAU/oil/inflation alert. Compare it with prior story state. Ask counterfactually whether market expectations would differ if this information had never appeared. Identify first and second order effects. Repeated consensus previews are not new data. A denial/reversal can be urgent. Return JSON only: {material:boolean, score:integer 0-100, reason:string}. Never use price reaction as a prerequisite.\n\n${NEWS_RECOGNITION_GUIDE}\n\n${SOURCE_RECOGNITION_GUIDE}\n\n${CATALYST_REASONING_GUIDE}\n\n${MATERIALITY_CALIBRATION_GUIDE}\n\n${SEQUENCE_REASONING_GUIDE}\n\n${REJECTED_OUTCOME_GUIDE}`, JSON.stringify({ article, event, prior }))
+    } as never);
     const raw = response.output_text.replace(/^```json\s*|\s*```$/g, "");
     return z.object({ material: z.boolean(), score: z.number().int().min(0).max(100), reason: z.string() }).parse(JSON.parse(raw));
   }
