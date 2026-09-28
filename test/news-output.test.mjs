@@ -16,6 +16,15 @@ for (const [sourceName, summary] of sources) test(`English ${sourceName} input p
   assert.ok(!finalNews.includes(summary));
 });
 
+test("delivery-time validator accepts every pipeline importance marker", () => {
+  const article = { provider: "test", providerId: "marker", sourceName: "Reuters", title: "Tariff update",
+    summary: "The government announced a tariff change.", url: "https://example.test", publishedAt: new Date() };
+  for (const marker of ["⚠️", "🔴", "🟡", "⚪"]) {
+    assert.deepEqual(validateNewsOutput(finalNews.replace("⚠️", marker), article), { ok: true }, marker);
+  }
+  assert.equal(validateNewsOutput(finalNews.replace("⚠️", "🚀"), article).ok, false);
+});
+
 test("metadata and raw long quote are blocked before routing", () => {
   const article = { provider: "test", providerId: "post", sourceName: "Truth Social", title: "Trump post",
     summary: "Donald Trump wrote a long original English statement about tariffs, China and a planned meeting at the White House.", url: "https://example.test", publishedAt: new Date() };

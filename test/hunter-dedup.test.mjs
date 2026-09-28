@@ -61,7 +61,7 @@ test("gold impact must reason cause→effect; one rewrite is attempted before ho
   const deps = { store, analyze: async () => ({ material: true, confidence: "high", reason: "hawkish", telegramMessage: verdict }), shadow: async () => ({ material: false, score: 0, reason: "" }),
     compose: async () => { composed++; return { message: good }; }, deliver: async (m) => { sent.push(m); return { c: 1 }; } };
   const r = await processArticle(a, deps);
-  assert.equal(r.stage, "SENT"); assert.equal(composed, 1); assert.equal(sent[0], good);
+  assert.equal(r.stage, "SENT"); assert.equal(composed, 1); assert.equal(sent[0], good.replace("⚠️", "🔴"));
 });
 
 test("timid alerts get one conviction rewrite; if it is not better the original still goes out", async () => {
@@ -76,7 +76,7 @@ test("timid alerts get one conviction rewrite; if it is not better the original 
     const deps = { store, analyze: async () => ({ material: true, confidence: "high", reason: "hawkish", telegramMessage: timid }), shadow: async () => ({ material: false, score: 0, reason: "" }),
       compose: async () => ({ message: rewrite }), deliver: async (m) => { sent.push(m); return { c: 1 }; } };
     const r = await processArticle(a, deps);
-    assert.equal(r.stage, "SENT"); assert.equal(sent[0], expected);
+    assert.equal(r.stage, "SENT"); assert.equal(sent[0], expected.replace("⚠️", "🔴"));
   }
 });
 

@@ -57,7 +57,9 @@ test("safe mode queues the exact message for replay", async () => {
   const { deps, deliveries, article } = setup({ material: true, reason: "new", telegramMessage: news }, { material: true, score: 90, reason: "new" });
   deps.store.setSafeMode(true);
   const result = await processArticle(article("Iran announces Hormuz shipping shutdown"), deps);
-  assert.equal(result.stage, "ROUTING"); assert.equal(result.renderedMessage, news); assert.equal(deliveries.length, 0);
+  assert.equal(result.stage, "ROUTING");
+  assert.equal(result.renderedMessage, news.replace("⚠️", "🔴"));
+  assert.equal(deliveries.length, 0);
 });
 
 test("identical Trump post is deduped before a second AI call", async () => {
