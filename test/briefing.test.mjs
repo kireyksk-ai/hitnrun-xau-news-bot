@@ -25,9 +25,9 @@ test("Europe and US follow daylight saving (winter: 14:30 and 20:00 WIB)", async
   assert.equal(new Date(winter.US).toISOString(), "2026-12-03T13:00:00.000Z");
   assert.equal(new Date(winter.ASIA).toISOString(), "2026-12-03T00:30:00.000Z");
 });
-test("Saturday gets the Asia recap only; Sunday gets nothing; recap windows chain the sessions", async () => {
+test("weekends have no briefings; recap windows chain the weekday sessions", async () => {
   const { recapSince } = await import("../dist/briefing.js");
-  assert.equal(dueBriefing(new Date("2026-09-26T00:31:00Z"), SCHED, {}), "ASIA");
+  assert.equal(dueBriefing(new Date("2026-09-26T00:31:00Z"), SCHED, {}), null);
   assert.equal(dueBriefing(new Date("2026-09-26T06:31:00Z"), SCHED, {}), null);
   assert.equal(dueBriefing(new Date("2026-09-26T12:01:00Z"), SCHED, {}), null);
   assert.equal(dueBriefing(new Date("2026-09-27T00:31:00Z"), SCHED, {}), null);
@@ -74,6 +74,9 @@ test("validator rejects trading instructions, links and off-topic text", () => {
   assert.equal(validateBriefing(body("Cek https://x.com")).ok, false);
   assert.equal(validateBriefing(body("Sources: Yahoo")).ok, false);
   assert.equal(validateBriefing(body("Ini dari bot kita.")).ok, false);
+  assert.equal(validateBriefing(body("Investasi AI menjadi sumber permintaan listrik dan mengubah ekspektasi inflasi.")).ok, true);
+  assert.equal(validateBriefing(body("\nSumber: Yahoo")).ok, false);
+  assert.equal(validateBriefing(body("Analisis ini dibuat oleh AI.")).ok, false);
   assert.equal(validateBriefing("pendek banget").ok, false);
   assert.equal(validateBriefing("kata ".repeat(100)).ok, false);
 });
