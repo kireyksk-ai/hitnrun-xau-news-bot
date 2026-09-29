@@ -34,8 +34,10 @@ test("minor oil item is dropped even when AI would call it relevant", async () =
 
 test("AI vetoes headline-only Trump/Fed repetition", async () => {
   const { deps, deliveries, article } = setup({ material: false, reason: "repeat", telegramMessage: null }, { material: false, score: 10, reason: "repeat" });
+  let shadowCalls = 0;
+  deps.shadow = async () => { shadowCalls++; return { material: false, score: 10, reason: "repeat" }; };
   const result = await processArticle(article("Trump announces he repeats his previous Fed rate view"), deps);
-  assert.notEqual(result.stage, "SENT"); assert.equal(deliveries.length, 0);
+  assert.notEqual(result.stage, "SENT"); assert.equal(deliveries.length, 0); assert.equal(shadowCalls, 0);
 });
 
 test("tier-three single source is held for corroboration", async () => {

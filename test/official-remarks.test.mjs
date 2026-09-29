@@ -78,7 +78,7 @@ test("a tier-3 copy is held for corroboration without spending any AI call", asy
   assert.equal(r.stage, "SOURCE");
 });
 
-test("a candidate lost to an AI outage is judged again once AI is back", async () => {
+test("a candidate lost to an AI outage is not resent after credits return", async () => {
   const { mkdtempSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
   const { IntelligenceStore } = await import("../dist/intelligence-store.js");
   const { processArticle } = await import("../dist/pipeline.js");
@@ -91,8 +91,9 @@ test("a candidate lost to an AI outage is judged again once AI is back", async (
   const base = { store, deliver: async (m) => { sent.push(m); return { chat: 1 }; }, compose: async () => ({ message: prose.replace(/\\n/g, "\n") }), mustSend: () => true };
   const down = await processArticle(article, { ...base, analyze: async () => { throw new AIContractFailure("AI unavailable: 429"); }, shadow: async () => { throw new Error("429"); } });
   assert.equal(down.stage, "AI_CONTRACT_FAILURE");
-  const up = await processArticle(article, { ...base, analyze: async () => ({ material: false, confidence: "low", reason: "minor", telegramMessage: null }), shadow: async () => ({ material: false, score: 10, reason: "minor" }) });
-  assert.equal(up.stage, "SENT"); assert.equal(sent.length, 1);
+  let calls = 0;
+  const up = await processArticle(article, { ...base, analyze: async () => { calls++; return { material: false, confidence: "low", reason: "minor", telegramMessage: null }; }, shadow: async () => ({ material: false, score: 10, reason: "minor" }) });
+  assert.equal(up.stage, "DUPLICATE"); assert.equal(calls, 0); assert.equal(sent.length, 0);
 });
 
 test("roundups are not remarks, and consumer sentiment news reaches Sol", async () => {

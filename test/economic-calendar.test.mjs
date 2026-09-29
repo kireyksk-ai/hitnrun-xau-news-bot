@@ -117,6 +117,20 @@ test("US results become one institutional note: every print, revision, seven sec
   assert.doesNotMatch(msg, /https?:|entry|stop loss/i);
 });
 
+test("local US batch keeps every simultaneous print and the pre-release forecast", async () => {
+  const { formatCalendarBatch } = await import("../dist/economic-calendar.js");
+  const base = { country: "USD", releaseAt: "2026-10-14T12:30:00Z", impact: "high", url: "" };
+  const items = [
+    { event: { ...base, id: "a", name: "Core CPI m/m", consensus: "0.4%", prior: "0.3%", actual: "0.4%" }, saved: { firstSeenForecast: "0.3%", firstSeenPrior: "0.2%" } },
+    { event: { ...base, id: "b", name: "CPI y/y", consensus: "2.9%", prior: "3.0%", actual: "2.8%" }, saved: {} }
+  ];
+  const message = formatCalendarBatch(items, "Emas turun | DXY naik | US10Y naik");
+  assert.match(message, /Core CPI m\/m: <b>0\.4%<\/b> vs forecast 0\.3%.*direvisi ke 0\.3%/);
+  assert.match(message, /CPI y\/y: <b>2\.8%<\/b> vs forecast 2\.9%/);
+  assert.match(message, /Dolar dan yield sedang sama-sama naik/);
+  assert.doesNotMatch(message, /https?:|entry|stop loss/i);
+});
+
 test("an owner-critical US release with an empty country field still gets the pre-release warning", async () => {
   const { dueStage, currencyOf } = await import("../dist/economic-calendar.js");
   const { priorityOf } = await import("../dist/brain-events.js");
