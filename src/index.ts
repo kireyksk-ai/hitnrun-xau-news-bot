@@ -70,10 +70,23 @@ if (quarantinedCandidates) log.warn({ quarantinedCandidates }, "Quarantined irre
 for (const provider of providers) store.markProvider(provider.name, "CONFIGURED");
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
 const discoveredDestination = config.TELEGRAM_CHAT_ID ? undefined : await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
+// HnR Regular can be paused until a time (REGULAR_PAUSED_UNTIL, e.g. 2026-09-30T13:00:00+07:00): the server itself
+// removes it from every delivery until then and adds it back on time, no computer or redeploy needed.
+const regularDestination: TelegramDestination | undefined = config.TELEGRAM_CHAT_ID_REGULAR ? { chatId: config.TELEGRAM_CHAT_ID_REGULAR } : undefined;
+const regularPausedUntil = config.REGULAR_PAUSED_UNTIL ? Date.parse(config.REGULAR_PAUSED_UNTIL) : NaN;
+const regularPaused = (now = Date.now()) => Number.isFinite(regularPausedUntil) && now < regularPausedUntil;
 const destinations: TelegramDestination[] = [
   { chatId: config.TELEGRAM_CHAT_ID ?? discoveredDestination!.chatId, messageThreadId: config.TELEGRAM_MESSAGE_THREAD_ID ?? discoveredDestination?.messageThreadId },
-  ...(config.TELEGRAM_CHAT_ID_REGULAR ? [{ chatId: config.TELEGRAM_CHAT_ID_REGULAR }] : [])
+  ...(regularDestination && !regularPaused() ? [regularDestination] : [])
 ];
+/** When Regular came back from a pause; calendar posts for releases before that are not replayed into it. */
+let regularSince = regularDestination && regularPaused() ? regularPausedUntil : 0;
+const calTargets = (releaseAt: string) => destinations.filter((d) => d !== regularDestination || Date.parse(releaseAt) >= regularSince - 15 * 60_000);
+if (regularDestination && regularPaused()) setInterval(() => {
+  if (regularPaused() || destinations.includes(regularDestination)) return;
+  destinations.push(regularDestination); regularSince = Date.now();
+  log.info({ chatId: regularDestination.chatId }, "HnR Regular resumed after scheduled pause");
+}, 30_000);
 const lastPolledAt = new Map<string, number>();
 const pausedUntil = new Map<string, number>();
 let ticking = false, adminPolling = false;
@@ -273,12 +286,12 @@ async function calendarTick(): Promise<void> {
       const currency = currencyOf(event);
       if (!config.CALENDAR_CURRENCIES.includes(currency) || (currency !== "USD" && event.impact !== "high")) continue;
       const existing = calendarLedger.get(event.id);
-      const stage = dueStage(event, Date.now(), existing, destinations.map((item) => item.chatId));
+      const stage = dueStage(event, Date.now(), existing, calTargets(event.releaseAt).map((item) => item.chatId));
       if (!stage || store.safeMode) continue;
       const withinHour = recentSendTimes.filter((time) => Date.now() - time < 3600000);
       recentSendTimes.length = 0; recentSendTimes.push(...withinHour);
       if (recentSendTimes.length >= 30) { store.setSafeMode(true); log.error("Safe mode enabled after abnormal combined news/calendar alert volume"); break; }
-      const pending = destinations.filter((destination) => !existing[stage === "WARNING" ? "warnedTo" : "actualTo"]?.[destination.chatId]);
+      const pending = calTargets(event.releaseAt).filter((destination) => !existing[stage === "WARNING" ? "warnedTo" : "actualTo"]?.[destination.chatId]);
       if (!pending.length) continue;
       const snapshot = await marketSnapshot().catch(() => "");
       // US results: one institutional note per release time covering every US print released together.
@@ -287,11 +300,11 @@ async function calendarTick(): Promise<void> {
         const set = calendarEvents.filter((e) => e.releaseAt === event.releaseAt && currencyOf(e) === "USD" && e.impact !== "low");
         if (set.some((e) => !e.actual) && Date.now() - Date.parse(event.releaseAt) < 180_000) continue;
         const group = calendarEvents.filter((e) => e.releaseAt === event.releaseAt && currencyOf(e) === "USD" && e.actual && !doneThisTick.has(e.id)
-          && dueStage(e, Date.now(), calendarLedger!.get(e.id), destinations.map((item) => item.chatId)) === "ACTUAL")
+          && dueStage(e, Date.now(), calendarLedger!.get(e.id), calTargets(e.releaseAt).map((item) => item.chatId)) === "ACTUAL")
           .sort((a, b) => (a.impact === "high" ? 0 : 1) - (b.impact === "high" ? 0 : 1));
         const items = group.map((e) => ({ event: e, saved: calendarLedger!.get(e.id) }));
         const message = formatCalendarBatch(items, snapshot);
-        const targets = destinations.filter((d) => !items.every((i) => i.saved.actualTo?.[d.chatId]));
+        const targets = calTargets(event.releaseAt).filter((d) => !items.every((i) => i.saved.actualTo?.[d.chatId]));
         const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, targets, message, store);
         for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
         if (Object.keys(accepted).length) {
@@ -335,7 +348,7 @@ async function speechResults(): Promise<void> {
     if (!titles.length) {
       // Never leave a warning hanging: after 3h with no reported line (hunted on Google News, wires and investingLive), close it honestly.
       if (age < 3 * 3_600_000) continue;
-      const waiting = destinations.filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
+      const waiting = calTargets(event.releaseAt).filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
       if (!waiting.length) continue;
       const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, waiting, formatSpeechQuiet(event), store);
       if (Object.keys(accepted).length) { calendarLedger.mark(event.id, "ACTUAL", accepted); recentSendTimes.push(Date.now()); }
@@ -344,7 +357,7 @@ async function speechResults(): Promise<void> {
     }
     // Give the wires time to publish more than one line unless the talk is already well past.
     if (titles.length < 2 && age < 60 * 60_000) continue;
-    const pending = destinations.filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
+    const pending = calTargets(event.releaseAt).filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
     if (!pending.length) continue;
     try {
       const written = { meaning: `Pernyataan yang terlapor: ${titles.slice(0, 3).join("; ")}`,
