@@ -18,6 +18,7 @@ import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
 import { InvestingLiveProvider } from "./providers/investinglive.js";
 import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.js";
 import { formatRecap, recapDue } from "./recap.js";
+import { aiUsage } from "./ai-usage.js";
 import { recoveryDigest } from "./outage-recovery.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
@@ -646,6 +647,8 @@ if (brain) {
   setInterval(() => void (async () => { await brain.regimeTick(); await brain.macroTick(); await brain.markTick(); await brain.calendarTick(); await brain.dailyTick(); })().catch((error) => log.error({ err: error }, "Brain tick failed")), 60000);
   for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => { try { brain.flush(); } finally { process.exit(0); } });
 }
+// Hourly AI spend by purpose, so the expensive part is visible in Render logs ("AI usage summary").
+setInterval(() => { const u = aiUsage.flush(); if (u.total.calls) log.info(u, "AI usage summary"); }, 3_600_000);
 setInterval(() => void briefingTick().catch((error) => log.error({ err: error }, "Briefing tick failed")), 30000);
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
 if (config.ECONOMIC_CALENDAR_ENABLED) {

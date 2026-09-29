@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { meter } from "./ai-usage.js";
 import { z } from "zod";
 import type { EditorialDecision, NewsArticle } from "./types.js";
 import type { EventAssessment, StoryState } from "./event-intelligence.js";
@@ -197,7 +198,7 @@ function buildTelegramMessage(raw: FormattableFields, call?: GoldCall): string {
 
 export class Editor {
   private client: OpenAI;
-  constructor(private readonly model: string, private readonly reasoningEffort: "low" | "medium" | "high", apiKey: string) { this.client = new OpenAI({ apiKey }); }
+  constructor(private readonly model: string, private readonly reasoningEffort: "low" | "medium" | "high", apiKey: string) { this.client = meter(new OpenAI({ apiKey })); }
   private async structuredDecision(article: NewsArticle, repair = false, incomplete?: z.infer<typeof decisionSchema>): Promise<z.infer<typeof decisionSchema>> {
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: this.reasoningEffort },
