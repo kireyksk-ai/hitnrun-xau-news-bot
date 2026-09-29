@@ -256,6 +256,23 @@ export function formatCalendarDeep(items: Array<{ event: CalendarEvent; saved: D
   return [...head, ...sections.map(([title], i) => `<b>${title}</b>\n${texts[i]}`)].join("\n\n");
 }
 
+/** One factual, local note for simultaneous US prints; no AI call or invented market reaction. */
+export function formatCalendarBatch(items: Array<{ event: CalendarEvent; saved: Delivery }>, marketContext: string): string {
+  const first = items[0];
+  if (!first) return "";
+  const high = items.some(({ event }) => event.impact === "high");
+  const lines = items.map(({ event, saved }) => {
+    const f = printFacts(event, saved);
+    const comparison = VERSUS_TEXT[f.versus] ? ` — ${VERSUS_TEXT[f.versus]}` : "";
+    const revision = f.revisedPrior ? `; angka sebelumnya direvisi ke ${f.revisedPrior}` : "";
+    return `• ${escapeHtml(f.name)}: <b>${escapeHtml(f.actual ?? "n/a")}</b> vs forecast ${escapeHtml(f.consensus ?? "n/a")} (sebelumnya ${escapeHtml(f.prior ?? "n/a")})${escapeHtml(comparison + revision)}`;
+  });
+  const narrative = calendarNarrative(first.event, "ACTUAL", marketContext, first.saved);
+  return [`<b>📰 HASIL ${countryTag("USD")}${high ? " ⭐⭐⭐" : ""}</b>`, `<b>Rilis ${formatWib(first.event.releaseAt)}</b>`, lines.join("\n"),
+    escapeHtml(narrative.meaning), escapeHtml(narrative.narrative),
+    "Reaksi awal bisa berubah; angka ini bukan bukti arah emas tanpa konfirmasi dolar dan yield."].join("\n\n");
+}
+
 export class CalendarLedger {
   private data: Record<string, Delivery>;
   constructor(private readonly path: string) {

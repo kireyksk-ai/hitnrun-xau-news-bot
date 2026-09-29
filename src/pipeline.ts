@@ -101,9 +101,9 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     deps.store.increment("duplicatesRemoved");
     return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "Source/author/post/content identity already processed" };
   }
-  // A candidate whose AI call failed (outage, no credits) is judged again when any copy returns within an hour.
-  const retryAfterOutage = previous?.stage === "AI_CONTRACT_FAILURE" && now.getTime() - Date.parse(previous.event.firstSeenAt) <= 3600_000;
-  if ((previous && !(previous.stage === "SOURCE" && event.sourceTier <= 2) && !retryAfterOutage) || (event.informationDelta === 0 && !retryAfterOutage)) {
+  // Outage-era headlines are context, not a backlog to send one by one after credits return.
+  // New facts still get a new event key and can be judged normally.
+  if ((previous && !(previous.stage === "SOURCE" && event.sourceTier <= 2)) || event.informationDelta === 0) {
     deps.store.increment("duplicatesRemoved");
     return { id: event.key, article, event, stage: "DUPLICATE", primaryDecision: "DROP", reason: "No information delta or event already processed" };
   }
@@ -188,7 +188,10 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // approved the event, a second call adds no protection and only burns budget.
   // A quota/outage failure is not a negative editorial verdict. A second Sol
   // request cannot improve it and doubles the failed-call traffic.
-  if (!contractFailure && !primary?.material) try { shadow = await deps.shadow(enriched, event); }
+  // Sol's explicit "repeat/no new fact" verdict is final; paying a second Sol
+  // call cannot override it and was a large source of duplicate-call spend.
+  const saysRepeat = /\bREPEAT\b|pengulangan|ngulang|bukan (?:fakta|info|informasi|berita) baru|(?:tidak|gak|gk|nggak) ada (?:fakta|info|informasi|hal) baru|no new (?:fact|information)/i.test(primary?.reason ?? "");
+  if (!contractFailure && !primary?.material && !saysRepeat) try { shadow = await deps.shadow(enriched, event); }
   catch { deps.store.increment("aiFailures"); }
   if (contractFailure) {
     const reason = must ? "AI_CONTRACT_FAILURE: official remark queued; AI unavailable" : shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";
@@ -214,7 +217,6 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // Owner rule: an official remark from a trusted source goes out even when Sol calls it minor; Sol still writes the text.
   // Owner rule (2026-09-26): when Sol itself calls the item a repeat / no new fact, nothing overrides that verdict
   // (not the shadow reviewer, not the official-remark rule). Repeats were flooding the groups.
-  const saysRepeat = /\bREPEAT\b|pengulangan|ngulang|bukan (?:fakta|info|informasi|berita) baru|(?:tidak|gak|gk|nggak) ada (?:fakta|info|informasi|hal) baru|no new (?:fact|information)/i.test(primary?.reason ?? "");
   const forced = must && corroborated && !deterministicPublish && !plausiblePublish && !saysRepeat;
   const publish = (deterministicPublish || plausiblePublish || forced) && !saysRepeat;
   record = { ...record, brain: { internal: primary?.internal }, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
@@ -287,7 +289,10 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // Independent second check. It can only block a weak/misattributed source or a
   // stale repeat; every other objection lowers the brain's internal confidence
   // while the news itself still goes out (news speed matters more than the call).
-  if (deps.critic) {
+  // A low-materiality official remark already received Sol's semantic review
+  // and passed the trusted-source gate. Reserve the independent critic for
+  // consequential alerts, where it can actually change the outcome.
+  if (deps.critic && (!forced || event.highPriority || event.marketMateriality >= 65)) {
     let critic: import("./brain-episodes.js").CriticResult;
     try { critic = await deps.critic(article, event, primary, record.reason); }
     catch { critic = { verdict: "SKIPPED", reasons: ["pemeriksa tidak tersedia"], pricedIn: false, preMoved: false, whipsawRisk: "MEDIUM", sourceIssue: false, crossMarketConflict: false }; }

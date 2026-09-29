@@ -53,7 +53,7 @@ type Data = { records: Record<string, ReviewRecord>; stories: Record<string, Sto
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
   memoryEvents?: Record<string, MemoryEvent>; candidateMemoryQuarantine?: Record<string, CandidateMemoryQuarantine>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
   alerts?: Record<string, AlertMemory>; marketSnapshot?: { text: string; capturedAt: string };
-  safeMode: boolean; lastReportDay?: string; updateOffset: number; regime: string; learningAlertStates?:Record<string,"OK"|"FAILURE">; schemaVersion?: number; brain?: PersistentMarketBrain };
+  safeMode: boolean; lastReportDay?: string; lastRecoveryDigestAt?: number; updateOffset: number; regime: string; learningAlertStates?:Record<string,"OK"|"FAILURE">; schemaVersion?: number; brain?: PersistentMarketBrain };
 
 function identityKeys(article: NewsArticle): string[] {
   const source = (article.sourceName || article.provider).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -117,6 +117,8 @@ export class IntelligenceStore {
     this.save();
   }
   records(): ReviewRecord[] { return Object.values(this.data.records); }
+  get lastRecoveryDigestAt(): number { return this.data.lastRecoveryDigestAt ?? 0; }
+  markRecoveryDigest(at: number): void { this.data.lastRecoveryDigestAt = at; this.save(); }
   record(item: ReviewRecord): void { this.data.records[item.id] = item; this.save(); }
   getStory(key: string): StoryState | undefined { return this.data.stories[key]; }
   /** Persist a compact, market-only observation before any expensive AI work. */

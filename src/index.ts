@@ -18,6 +18,7 @@ import { BenzingaWireProvider } from "./providers/benzinga-wire.js";
 import { InvestingLiveProvider } from "./providers/investinglive.js";
 import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.js";
 import { formatRecap, recapDue } from "./recap.js";
+import { recoveryDigest } from "./outage-recovery.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
 import { deliverTelegramMessage, discoverTelegramDestination, fetchAdminUpdates, sendTelegramMessage } from "./telegram.js";
@@ -35,7 +36,7 @@ import { mustReview, priorityOf } from "./brain-events.js";
 import { regimeBrief } from "./brain-regime.js";
 import { BriefingLedger, briefingPrompt, dueBriefing, jakarta, releasedEvents, upcomingEvents, validateBriefing, type BriefingKind, recapSince, SESSION } from "./briefing.js";
 import { PredictionLedger, applyMark, dueMarks, formatScorecard, scorecard, type Prediction } from "./predictions.js";
-import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarDeep, formatCalendarMessage, formatSpeechQuiet, formatSpeechResult, formatWib, goldLinkNote, isSpeech, printFacts, speakerOf, type CalendarEvent } from "./economic-calendar.js";
+import { CalendarLedger, calendarNarrative, currencyOf, dueStage, fetchCalendarEvents, formatCalendarBatch, formatCalendarMessage, formatSpeechQuiet, formatSpeechResult, formatWib, isSpeech, speakerOf, type CalendarEvent } from "./economic-calendar.js";
 import { calendarMatch, fetchFacts, needsFacts } from "./article-facts.js";
 import { AUDIT_QUERIES, formatFunnel, formatTrace, funnel, readArchive, referenceAudit, saveReport, traceHeadline } from "./coverage.js";
 import { parseRss } from "./brain-hunter.js";
@@ -76,6 +77,7 @@ const destinations: TelegramDestination[] = [
 const lastPolledAt = new Map<string, number>();
 const pausedUntil = new Map<string, number>();
 let aiDay = "", aiCount = 0, ticking = false, adminPolling = false;
+let lastPipelineProgressAt = Date.now(), lastCalendarProgressAt = Date.now();
 let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
 const calendarLedger = config.ECONOMIC_CALENDAR_ENABLED ? new CalendarLedger(`${config.SQLITE_PATH}.calendar.json`) : null;
@@ -216,6 +218,15 @@ async function deliver(message: string, id: string, article: import("./types.js"
     log.error({ id }, "Safe mode enabled after abnormal alert volume");
     return {};
   }
+  const digest = recoveryDigest(store.records(), store.lastRecoveryDigestAt, Date.now(), id);
+  if (digest) {
+    const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, digest, store);
+    for (const failure of failures) log.error({ chatId: failure.chatId, error: failure.error }, "Recovery digest destination failed");
+    if (Object.keys(accepted).length) {
+      store.markRecoveryDigest(Date.now()); recentSendTimes.push(Date.now());
+      log.info({ accepted: Object.keys(accepted).length }, "Fresh outage context digest sent; old headlines will not be replayed");
+    }
+  }
   const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN,destinations,message,store);
   for (const failure of failures) log.error({ chatId: failure.chatId, id, error: failure.error }, "Telegram destination failed");
   if (Object.keys(accepted).length) recentSendTimes.push(Date.now());
@@ -279,49 +290,26 @@ async function calendarTick(): Promise<void> {
           && dueStage(e, Date.now(), calendarLedger!.get(e.id), destinations.map((item) => item.chatId)) === "ACTUAL")
           .sort((a, b) => (a.impact === "high" ? 0 : 1) - (b.impact === "high" ? 0 : 1));
         const items = group.map((e) => ({ event: e, saved: calendarLedger!.get(e.id) }));
-        try {
-          const upcoming = calendarEvents.filter((e) => currencyOf(e) === "USD" && (e.impact === "high" || e.impact === "medium") && Date.parse(e.releaseAt) > Date.now() && Date.parse(e.releaseAt) - Date.now() < 3 * 86400_000)
-            .slice(0, 8).map((e) => `${formatWib(e.releaseAt)} ${e.name} (perkiraan ${e.consensus ?? "n/a"}, sebelumnya ${e.prior ?? "n/a"})`).join("; ");
-          const context = [goldLinkNote("USD"), brain ? await brain.calendarContext(event, "ACTUAL") : snapshot, ...items.map((i) => backtest?.insight(i.event.name, brain?.linkage() ?? "MIXED") ?? "")].filter(Boolean).join("\n");
-          const dive = await Promise.race([
-            briefingEditor.calendarDeepDive({ releaseWib: formatWib(event.releaseAt), prints: items.map((i) => printFacts(i.event, i.saved)), context, nextEvents: upcoming ? `AGENDA BERIKUTNYA: ${upcoming}` : "AGENDA BERIKUTNYA: (kosong)" }),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 90_000))
-          ]);
-          const text = dive ? Object.values(dive).join(" ") : "";
-          if (dive && Object.values(dive).every((v) => v.length > 40) && !/https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(text)) {
-            const message = formatCalendarDeep(items, dive);
-            const targets = destinations.filter((d) => !items.every((i) => i.saved.actualTo?.[d.chatId]));
-            const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, targets, message, store);
-            for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
-            if (Object.keys(accepted).length) {
-              for (const i of items) { calendarLedger.mark(i.event.id, "ACTUAL", accepted); doneThisTick.add(i.event.id); postedReleases.push({ at: Date.now(), name: i.event.name, actual: i.event.actual! }); }
-              postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); recentSendTimes.push(Date.now());
-            }
-            log.info({ events: items.map((i) => i.event.name), accepted: Object.keys(accepted).length, chars: message.length }, "Calendar US deep analysis processed");
-            continue;
-          }
-          log.warn({ event: event.name }, "US deep analysis incomplete; falling back to the short result");
-        } catch (error) { log.warn({ err: error, event: event.name }, "US deep analysis failed; falling back to the short result"); }
+        const message = formatCalendarBatch(items, snapshot);
+        const targets = destinations.filter((d) => !items.every((i) => i.saved.actualTo?.[d.chatId]));
+        const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, targets, message, store);
+        for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
+        if (Object.keys(accepted).length) {
+          for (const i of items) { calendarLedger.mark(i.event.id, "ACTUAL", accepted); doneThisTick.add(i.event.id); postedReleases.push({ at: Date.now(), name: i.event.name, actual: i.event.actual! }); }
+          postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); recentSendTimes.push(Date.now());
+        }
+        log.info({ events: items.map((i) => i.event.name), accepted: Object.keys(accepted).length, chars: message.length }, "Calendar US batch processed locally");
+        continue;
       }
-      // Sol writes the warning/result in the owner's voice with the playbook chain; the fixed template is the fallback.
-      let explanation = calendarNarrative(event, stage, snapshot, existing), analysed = false;
-      try {
-        const context = [`MATA UANG: ${currency}. ${goldLinkNote(currency)}`, brain ? await brain.calendarContext(event, stage) : snapshot, currency === "USD" ? backtest?.insight(event.name, brain?.linkage() ?? "MIXED") ?? "" : ""].filter(Boolean).join("\n");
-        const consensus = (existing.firstSeenForecast !== undefined ? existing.firstSeenForecast : event.consensus) ?? null;
-        const written = await Promise.race([
-          briefingEditor.calendarText({ stage, name: event.name, country: currency, releaseWib: formatWib(event.releaseAt), actual: event.actual, consensus, prior: (existing.firstSeenPrior !== undefined ? existing.firstSeenPrior : event.prior) ?? null, context }),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000))
-        ]);
-        if (written && written.meaning && written.narrative && !/https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(`${written.meaning} ${written.narrative}`)) { explanation = written; analysed = true; }
-      } catch (error) { log.warn({ err: error, event: event.name }, "Calendar AI text failed; using template"); }
-      const message = formatCalendarMessage(event, stage, explanation, existing, analysed);
+      // Calendar numbers and warnings use the owner's requested local narrative.
+      const message = formatCalendarMessage(event, stage, calendarNarrative(event, stage, snapshot, existing), existing);
       const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, pending, message, store);
       for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Calendar Telegram destination failed");
       if (Object.keys(accepted).length) { calendarLedger.mark(event.id, stage, accepted); recentSendTimes.push(Date.now()); if (stage === "ACTUAL" && event.actual) { postedReleases.push({ at: Date.now(), name: event.name, actual: event.actual }); postedReleases.splice(0, Math.max(0, postedReleases.length - 50)); } }
       log.info({ event: event.name, stage, accepted: Object.keys(accepted).length }, "Calendar alert processed");
     }
     await speechResults();
-  } finally { calendarTicking = false; }
+  } finally { lastCalendarProgressAt = Date.now(); calendarTicking = false; }
 }
 /**
  * A warned speech has no figure, so its result is what was said: 20 minutes to 4 hours after the start,
@@ -356,14 +344,11 @@ async function speechResults(): Promise<void> {
     }
     // Give the wires time to publish more than one line unless the talk is already well past.
     if (titles.length < 2 && age < 60 * 60_000) continue;
-    const currency = currencyOf(event);
     const pending = destinations.filter((d) => !calendarLedger!.get(event.id).actualTo?.[d.chatId]);
     if (!pending.length) continue;
     try {
-      const context = [`MATA UANG: ${currency}. ${goldLinkNote(currency)}`, `HEADLINE PIDATO ${speaker.toUpperCase()} (satu-satunya bahan fakta):\n${titles.map((t) => `- ${t}`).join("\n")}`,
-        brain ? await brain.calendarContext(event, "ACTUAL") : await marketSnapshot().catch(() => "")].filter(Boolean).join("\n");
-      const written = await briefingEditor.calendarText({ stage: "ACTUAL", speech: true, name: event.name, country: currency, releaseWib: formatWib(event.releaseAt), actual: null, consensus: null, prior: null, context });
-      if (!written.meaning || !written.narrative || /https?:\/\/|\b(entry|stop ?loss|take profit|dijamin|pasti naik|pasti turun)\b/i.test(`${written.meaning} ${written.narrative}`)) continue;
+      const written = { meaning: `Pernyataan yang terlapor: ${titles.slice(0, 3).join("; ")}`,
+        narrative: `Ini rangkuman headline pidato ${speaker}, bukan kutipan lengkap. Dampaknya ke emas belum dapat dipastikan hanya dari headline; perhatikan apakah ada perubahan nyata pada ekspektasi suku bunga, dolar, atau yield.` };
       const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, pending, formatSpeechResult(event, written, titles.length), store);
       for (const failure of failures) log.error({ chatId: failure.chatId, event: event.name, error: failure.error }, "Speech result destination failed");
       if (Object.keys(accepted).length) { calendarLedger.mark(event.id, "ACTUAL", accepted); recentSendTimes.push(Date.now()); }
@@ -488,6 +473,7 @@ async function pollAdmin(): Promise<void> {
 async function tick(): Promise<void> {
   if (ticking) return; ticking = true;
   try {
+    lastPipelineProgressAt = Date.now();
     await pollAdmin(); await adminReport(); await coverageTick();
     try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
@@ -496,7 +482,7 @@ async function tick(): Promise<void> {
       try { const observed = await observeMarket(store); log.info({ kind: observed.decision.kind, attribution: observed.decision.attribution, assets: Object.keys(observed.point.values).length }, "Shadow market observer completed"); }
       catch (error) { log.warn({ err: error }, "Shadow market observer failed"); }
     }
-    try { await replayAiFailures(); } catch (error) { log.warn({ err: error }, "AI outage replay failed"); }
+    // Never replay old outage-era headlines individually after credits recover.
     try { await recapTick(); } catch (error) { log.warn({ err: error }, "News recap failed"); }
     const since = new Date(Date.now() - config.MAX_ARTICLE_AGE_MINUTES * 60000);
     for (const provider of providers) {
@@ -526,6 +512,7 @@ async function tick(): Promise<void> {
           try { await brain?.onResult(result); } catch (error) { log.warn({ err: error }, "Brain episode failed"); }
           log.info({ provider: provider.name, title: article.title, stage: result.stage, decision: result.primaryDecision,
             importance: result.event.importance, urgency: result.event.urgency, reason: result.reason }, "Event processed");
+          lastPipelineProgressAt = Date.now();
         }
       } catch (error) {
         store.increment("providerFailures");
@@ -540,7 +527,7 @@ async function tick(): Promise<void> {
       try { await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, `Learning ${alert.state}: ${alert.message}`); }
       catch (error) { log.warn({ err:error, alert:alert.key }, "Admin learning alert failed"); }
     }
-  } finally { ticking = false; }
+  } finally { lastPipelineProgressAt = Date.now(); ticking = false; }
 }
 function articleDeps(): Parameters<typeof processArticle>[1] {
   return {
@@ -562,23 +549,6 @@ function articleDeps(): Parameters<typeof processArticle>[1] {
       .map((r) => ({ sentAt: r.sentAt!, storyKey: r.event.storyKey, title: r.article.title, eventKey: r.event.key })), predictions.all(), event.storyKey, new Date(),
       { shadow: shadowOutcomes.all(), fact: event.fact }), brain?.contextFor(event, item) ?? "", officialContext(6, 15), candleLab?.experience() ?? ""].filter(Boolean).join("\n\n")
   };
-}
-/** After an AI outage (e.g. no credits) the failed candidates of the last hour (older news is stale) are judged again, a few per tick. */
-const replayTries = new Map<string, { n: number; at: number }>();
-async function replayAiFailures(): Promise<void> {
-  const now = Date.now();
-  const due = store.records().filter((r) => r.stage === "AI_CONTRACT_FAILURE" && now - Date.parse(r.event.firstSeenAt) <= 3_600_000)
-    .filter((r) => { const t = replayTries.get(r.id); return !t || (t.n < 3 && now - t.at >= 120_000); })
-    .sort((a, b) => b.event.firstSeenAt.localeCompare(a.event.firstSeenAt)).slice(0, 3);
-  for (const r of due) {
-    const t = replayTries.get(r.id); replayTries.set(r.id, { n: (t?.n ?? 0) + 1, at: now });
-    try {
-      const result = await processArticle({ ...r.article, publishedAt: new Date(r.article.publishedAt) }, articleDeps());
-      try { await rememberOutcome(result); } catch { /* measurement only */ }
-      log.info({ title: r.article.title.slice(0, 120), stage: result.stage, reason: result.reason.slice(0, 120) }, "Replayed after AI outage");
-    } catch (error) { log.warn({ err: error, id: r.id }, "Replay after AI outage failed"); }
-  }
-  if (replayTries.size > 500) for (const [k, v] of replayTries) if (now - v.at > 3 * 3_600_000) replayTries.delete(k);
 }
 /** Catch-up digest after a run of NEWS posts (no AI; headlines already posted). */
 const recapPath = `${config.SQLITE_PATH}.recap.json`;
@@ -645,6 +615,17 @@ async function briefingTick(): Promise<void> {
   finally { briefingBusy = false; }
 }
 
+// Render's "Live" state only says the container exists. A hung fetch/model call
+// can otherwise leave the worker silent for hours while the process stays alive.
+setInterval(() => {
+  const pipelineAgeMs = Date.now() - lastPipelineProgressAt;
+  const calendarAgeMs = Date.now() - lastCalendarProgressAt;
+  if (pipelineAgeMs > 12 * 60_000 || (config.ECONOMIC_CALENDAR_ENABLED && calendarAgeMs > 12 * 60_000)) {
+    log.fatal({ pipelineAgeMs, calendarAgeMs, ticking, calendarTicking }, "Worker stalled; exiting for Render restart");
+    process.exit(1);
+  }
+  log.info({ pipelineAgeMs, calendarAgeMs, ticking, calendarTicking }, "Worker heartbeat");
+}, 120_000);
 await tick();
 if (brain) {
   await brain.regimeTick(true).catch((error) => log.warn({ err: error }, "Brain regime tick failed"));
