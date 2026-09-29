@@ -50,6 +50,7 @@ const emptyMetrics = (): Metrics => ({ ingested: 0, uniqueEvents: 0, alertsSent:
   obviousNoiseDrop: 0, plausibleMacroToSol: 0, deterministicMaterialToSol: 0, solReject: 0, solSend: 0,
   latencyTotalMs: 0, latencyCount: 0, providerLatencyMs: {} });
 type Data = { records: Record<string, ReviewRecord>; stories: Record<string, StoryState>; metrics: Record<string, Metrics>;
+  aiBudget?: Partial<Record<"editor" | "brain", { day: string; used: number }>>;
   processedIdentities?: Record<string, string>; deliveredIdentities?: Record<string, string>;
   memoryEvents?: Record<string, MemoryEvent>; candidateMemoryQuarantine?: Record<string, CandidateMemoryQuarantine>; actorStances?: Record<string, ActorStance>; macroReleases?: Record<string, MacroRelease>;
   alerts?: Record<string, AlertMemory>; marketSnapshot?: { text: string; capturedAt: string };
@@ -117,6 +118,21 @@ export class IntelligenceStore {
     this.save();
   }
   records(): ReviewRecord[] { return Object.values(this.data.records); }
+  aiCallsToday(scope: "editor" | "brain", day: string): number {
+    const budget = this.data.aiBudget?.[scope];
+    if (budget?.day === day) return budget.used;
+    // On the first deploy with this ledger, seed the editor budget from today's
+    // already-reviewed records so redeploying cannot grant a fresh full allowance.
+    return scope === "editor" ? this.records().filter((r) => r.audit?.aiCalled && r.event.firstSeenAt.slice(0, 10) === day).length : 0;
+  }
+  reserveAiCall(scope: "editor" | "brain", day: string, limit: number): boolean {
+    const used = this.aiCallsToday(scope, day);
+    if (used >= limit) return false;
+    this.data.aiBudget ??= {};
+    this.data.aiBudget[scope] = { day, used: used + 1 };
+    this.save();
+    return true;
+  }
   get lastRecoveryDigestAt(): number { return this.data.lastRecoveryDigestAt ?? 0; }
   markRecoveryDigest(at: number): void { this.data.lastRecoveryDigestAt = at; this.save(); }
   record(item: ReviewRecord): void { this.data.records[item.id] = item; this.save(); }

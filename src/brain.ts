@@ -41,7 +41,6 @@ export class MarketBrain {
   readonly macro: MacroLedger; readonly calendar: CalendarHistory;
   private lastMacroAt = 0;
   private retrievalCache = new Map<string, { episodeIds: string[]; lessonKeys: string[] }>();
-  private aiDay = ""; private aiUsed = 0;
   private lastRegimeAt = 0; private lastMarkAt = 0; private lastDaily = ""; private lastWeekly = ""; private marking = false;
   private halted?: string; private autonomyNote = "";
   constructor(private readonly store: IntelligenceStore, private readonly editor: Editor, private readonly cfg: BrainConfig) {
@@ -59,9 +58,7 @@ export class MarketBrain {
 
   private brainAi(): boolean {
     const day = new Date().toISOString().slice(0, 10);
-    if (day !== this.aiDay) { this.aiDay = day; this.aiUsed = 0; }
-    if (this.aiUsed >= this.cfg.aiCallsPerDay) return false;
-    this.aiUsed++; return true;
+    return this.store.reserveAiCall("brain", day, this.cfg.aiCallsPerDay);
   }
 
   /** Recent material catalysts (48h) feed the regime engine. */

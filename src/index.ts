@@ -76,7 +76,7 @@ const destinations: TelegramDestination[] = [
 ];
 const lastPolledAt = new Map<string, number>();
 const pausedUntil = new Map<string, number>();
-let aiDay = "", aiCount = 0, ticking = false, adminPolling = false;
+let ticking = false, adminPolling = false;
 let lastPipelineProgressAt = Date.now(), lastCalendarProgressAt = Date.now();
 let lastMarketObservationAt = 0;
 const recentSendTimes: number[] = [];
@@ -191,21 +191,21 @@ async function publicScorecard(): Promise<void> {
 let budgetWarned = "";
 function aiAllowed(sourceTier = 1): boolean {
   const day = new Date().toISOString().slice(0, 10);
-  if (day !== aiDay) { aiDay = day; aiCount = 0; }
   // Budget is measured in model calls, not articles; each candidate uses up to two calls.
   const limit = config.MAX_AI_ARTICLES_PER_DAY * 2;
+  const used = store.aiCallsToday("editor", day);
   // Keep the last 20% of the day's budget for trusted (tier 1-2) sources only.
-  const reserved = sourceTier >= 3 && aiCount >= limit * 0.8;
-  if (aiCount >= limit || reserved) {
-    if (aiCount >= limit && budgetWarned !== day) {
+  const reserved = sourceTier >= 3 && used >= limit * 0.8;
+  if (used >= limit || reserved) {
+    if (used >= limit && budgetWarned !== day) {
       budgetWarned = day;
-      log.error({ used: aiCount, limit }, "AI budget exhausted; new candidates cannot be judged until 00:00 UTC");
+      log.error({ used, limit }, "AI budget exhausted; new candidates cannot be judged until 00:00 UTC");
       if (config.TELEGRAM_ADMIN_CHAT_ID) void sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID },
-        `Jatah AI harian habis (${aiCount}/${limit} panggilan). Berita baru tidak dinilai sampai 07:00 WIB. Naikkan MAX_AI_ARTICLES_PER_DAY bila perlu.`).catch(() => undefined);
+        `Jatah AI harian habis (${used}/${limit} panggilan). Berita baru tidak dinilai sampai 07:00 WIB. Naikkan MAX_AI_ARTICLES_PER_DAY bila perlu.`).catch(() => undefined);
     }
     return false;
   }
-  aiCount++; return true;
+  return store.reserveAiCall("editor", day, limit);
 }
 async function deliver(message: string, id: string, article: import("./types.js").NewsArticle): Promise<Record<string, number>> {
   const outputCheck = validateNewsOutput(message, article);
