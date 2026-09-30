@@ -31,6 +31,8 @@ export type PipelineDeps = {
   important?: (article: NewsArticle, event: EventAssessment) => boolean;
   /** Optional: owner rule: an official's remark on policy/inflation/trade/war must be published once found (still deduplicated and source-checked). */
   mustSend?: (article: NewsArticle, event: EventAssessment) => boolean;
+  /** Optional: cheap gatekeeper before the expensive desk (Sol); pass=false stops here without a Sol call. */
+  gate?: (article: NewsArticle, event: EventAssessment) => Promise<{ pass: boolean; reason: string }>;
   critic?: (article: NewsArticle, event: EventAssessment, primary: EditorialDecision | undefined, reason: string) => Promise<import("./brain-episodes.js").CriticResult>;
   now?: () => Date;
 };
@@ -179,6 +181,16 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
     return record;
   }
 
+  // Cost rule (2026-09-30): a small model screens repeats and off-topic items before Sol. A gate failure lets the item through.
+  if (deps.gate) {
+    let verdict: { pass: boolean; reason: string } | undefined;
+    try { verdict = await deps.gate(article, event); } catch { verdict = undefined; }
+    if (verdict && !verdict.pass) {
+      record = { ...record, stage: "SCORE", primaryDecision: "DROP", reason: `GATE: ${verdict.reason}`, audit: { ...auditBase, prefilter: "REJECT", outcome: "INTELLIGENCE_NOT_MATERIAL" } };
+      deps.store.record(record); deps.store.markProcessedIdentity(article, event.key); deps.store.rememberEvidence(article, event, false); deps.store.increment("lowValueRejected");
+      return record;
+    }
+  }
   let primary: EditorialDecision | undefined;
   let shadow: { material: boolean; score: number; reason: string } | undefined;
   let contractFailure = false;
@@ -191,7 +203,8 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // Sol's explicit "repeat/no new fact" verdict is final; paying a second Sol
   // call cannot override it and was a large source of duplicate-call spend.
   const saysRepeat = /\bREPEAT\b|pengulangan|ngulang|bukan (?:fakta|info|informasi|berita) baru|(?:tidak|gak|gk|nggak) ada (?:fakta|info|informasi|hal) baru|no new (?:fact|information)/i.test(primary?.reason ?? "");
-  if (!contractFailure && !primary?.material && !saysRepeat) try { shadow = await deps.shadow(enriched, event); }
+  // The second Sol opinion is kept for high-priority events only (it doubled the cost of every rejected item).
+  if (!contractFailure && !primary?.material && !saysRepeat && event.highPriority) try { shadow = await deps.shadow(enriched, event); }
   catch { deps.store.increment("aiFailures"); }
   if (contractFailure) {
     const reason = must ? "AI_CONTRACT_FAILURE: official remark queued; AI unavailable" : shadow?.material && shadow.score >= 80 ? "AI_CONTRACT_FAILURE: primary and repair invalid; fallback evaluated material candidate" : "AI_CONTRACT_FAILURE: primary and repair invalid";

@@ -69,6 +69,8 @@ const schema = z.object({
     MAX_AI_ARTICLES_PER_DAY: z.coerce.number().int().min(1).max(1000).default(90),
     OPENAI_MODEL: z.string().default("gpt-5.6-sol"),
     OPENAI_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
+    GATE_MODEL: z.string().default("gpt-5.6-luna").transform((value) => value.trim()),
+    AI_DAILY_USD_CAP: z.coerce.number().min(0).default(7),
     POLL_INTERVAL_SECONDS: z.coerce.number().int().min(15).default(45),
     GOOGLE_NEWS_RSS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
     TRUTH_SOCIAL_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),

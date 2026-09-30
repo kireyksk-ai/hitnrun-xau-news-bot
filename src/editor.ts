@@ -253,6 +253,23 @@ export class Editor {
     return { message: buildTelegramMessage({ judul, ringkasan, dampakEmas }, call), call };
   }
 
+  /**
+   * Cheap gatekeeper (owner 2026-09-30: max $7/day). A small model decides only "worth the expensive desk or not":
+   * repeats of what was already posted, off-topic items (court cases, company news, recaps) and minor echoes stop here.
+   * It errs toward PASS: anything that could be new and market-moving for XAU/DXY goes to Sol.
+   */
+  async gate(article: NewsArticle, recent: string[]): Promise<{ pass: boolean; reason: string }> {
+    const schema = { type: "object", additionalProperties: false, required: ["pass", "repeat", "reason"],
+      properties: { pass: { type: "boolean" }, repeat: { type: "boolean" }, reason: { type: "string" } } };
+    const response = await this.client.responses.create({
+      model: this.model, store: false, reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", name: "news_gate", strict: true, schema } } as never,
+      input: [{ role: "developer", content: "You are the gatekeeper of a gold (XAUUSD) news desk. Decide if this headline deserves the senior analyst. PASS if it could be a NEW fact that moves expectations for Fed/rates/inflation/dollar/yields/oil/war/sanctions/tariffs/central-bank gold, including new remarks by officials. FAIL (pass=false) only when clearly: (a) the same fact as one of RECENT (already posted or judged), just reworded or from another wire (set repeat=true); (b) off-topic for XAU/DXY (court or legal 'sanctions', company/earnings/stock picks, crypto, sports, politics without economic action); (c) a recap, preview, explainer or opinion with no new fact. When unsure, PASS. reason: max 12 words." },
+        { role: "user", content: JSON.stringify({ headline: article.title, summary: (article.summary ?? "").split("\n\nMARKET_CONTEXT_PACK")[0].slice(0, 500), source: article.sourceName ?? article.provider, recent: recent.slice(0, 15) }) }]
+    });
+    const out = JSON.parse((response as { output_text: string }).output_text) as { pass: boolean; repeat: boolean; reason: string };
+    return { pass: Boolean(out.pass), reason: `${out.repeat ? "REPEAT: " : ""}${out.reason}`.slice(0, 160) };
+  }
   /** A separate judgment that never receives the primary classifier's answer. */
   async shadowAssess(article: NewsArticle, event: EventAssessment, prior?: StoryState): Promise<{ material: boolean; score: number; reason: string }> {
     const response = await this.client.responses.create({

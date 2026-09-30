@@ -13,15 +13,31 @@ export const PRICES = {
   output: Number(process.env.AI_PRICE_OUTPUT_PER_M ?? NaN)
 };
 
+/** USD per 1M tokens by model family (OpenAI list prices, Sep 2026); env AI_PRICE_* overrides the Sol row. */
+export const MODEL_PRICES: Record<string, { input: number; cached: number; output: number }> = {
+  sol: { input: Number(process.env.AI_PRICE_INPUT_PER_M ?? 4), cached: Number(process.env.AI_PRICE_CACHED_PER_M ?? 0.4), output: Number(process.env.AI_PRICE_OUTPUT_PER_M ?? 20) },
+  terra: { input: 2, cached: 0.2, output: 12 },
+  luna: { input: 0.2, cached: 0.02, output: 1.2 }
+};
+export function priceFor(model = ""): { input: number; cached: number; output: number } {
+  return MODEL_PRICES[/luna/i.test(model) ? "luna" : /terra/i.test(model) ? "terra" : "sol"];
+}
+
 export class AiUsage {
   private rows = new Map<string, Row>();
+  /** Estimated spend of the current UTC day (all purposes), fed by record(); persisted by the caller. */
+  day = { date: new Date().toISOString().slice(0, 10), usd: 0 };
   private since = Date.now();
-  record(purpose: string, usage: unknown): void {
+  record(purpose: string, usage: unknown, model = ""): void {
     const u = (usage ?? {}) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number } };
     const row = this.rows.get(purpose) ?? { calls: 0, input: 0, cached: 0, output: 0, reasoning: 0 };
     row.calls++; row.input += u.input_tokens ?? 0; row.cached += u.input_tokens_details?.cached_tokens ?? 0;
     row.output += u.output_tokens ?? 0; row.reasoning += u.output_tokens_details?.reasoning_tokens ?? 0;
     this.rows.set(purpose, row);
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.day.date !== today) this.day = { date: today, usd: 0 };
+    const cached = u.input_tokens_details?.cached_tokens ?? 0;
+    this.day.usd += AiUsage.cost({ input: u.input_tokens ?? 0, cached, output: u.output_tokens ?? 0, reasoning: 0 }, priceFor(model)) ?? 0;
   }
   /** Estimated USD for a row, or null when prices are not configured. */
   static cost(r: Usage, prices = PRICES): number | null {
@@ -44,9 +60,9 @@ export const aiUsage = new AiUsage();
 /** Wraps an OpenAI client so every responses.create call is recorded under its schema name (or "briefing"). */
 export function meter<T extends { responses: { create: (...args: any[]) => any } }>(client: T): T {
   const original = client.responses.create.bind(client.responses);
-  (client.responses as { create: unknown }).create = async (body: { text?: { format?: { name?: string } } }, ...rest: unknown[]) => {
+  (client.responses as { create: unknown }).create = async (body: { model?: string; text?: { format?: { name?: string } } }, ...rest: unknown[]) => {
     const response = await original(body, ...rest);
-    aiUsage.record(body?.text?.format?.name ?? "briefing", (response as { usage?: unknown })?.usage);
+    aiUsage.record(body?.text?.format?.name ?? "briefing", (response as { usage?: unknown })?.usage, body?.model);
     return response;
   };
   return client;

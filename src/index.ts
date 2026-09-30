@@ -70,6 +70,7 @@ const quarantinedCandidates = store.quarantineIrrelevantCandidateMemory();
 if (quarantinedCandidates) log.warn({ quarantinedCandidates }, "Quarantined irrelevant legacy candidate-memory events");
 for (const provider of providers) store.markProvider(provider.name, "CONFIGURED");
 const editor = new Editor(config.OPENAI_MODEL, config.OPENAI_REASONING_EFFORT, config.OPENAI_API_KEY);
+const gateEditor = config.GATE_MODEL ? new Editor(config.GATE_MODEL, "low", config.OPENAI_API_KEY) : undefined;
 const discoveredDestination = config.TELEGRAM_CHAT_ID ? undefined : await discoverTelegramDestination(config.TELEGRAM_BOT_TOKEN);
 // HnR Regular can be paused until a time (REGULAR_PAUSED_UNTIL, e.g. 2026-09-30T13:00:00+07:00): the server itself
 // removes it from every delivery until then and adds it back on time, no computer or redeploy needed.
@@ -370,6 +371,22 @@ async function speechResults(): Promise<void> {
     } catch (error) { log.warn({ err: error, event: event.name }, "Speech result failed"); }
   }
 }
+/** Headlines the gatekeeper compares against: posted in the last 6h and judged in the last hour. */
+function recentForGate(): string[] {
+  const now = Date.now();
+  return store.records().filter((r) => (r.stage === "SENT" && r.sentAt && now - Date.parse(r.sentAt) < 6 * 3_600_000) || (r.audit?.aiCalled && now - Date.parse(r.event.firstSeenAt) < 3_600_000))
+    .sort((a, b) => b.event.firstSeenAt.localeCompare(a.event.firstSeenAt)).slice(0, 15).map((r) => `${r.stage === "SENT" ? "[POSTED] " : "[JUDGED] "}${r.article.title.replace(/^@\w+:\s*/, "").slice(0, 140)}`);
+}
+/** Daily dollar ceiling (AI_DAILY_USD_CAP, default 7). Past it only high-priority events reach Sol; calendar and briefings are unaffected. */
+const usdPath = `${config.SQLITE_PATH}.aiusd.json`;
+try { const saved = JSON.parse(readFileSync(usdPath, "utf8")); if (saved.date === new Date().toISOString().slice(0, 10)) aiUsage.day = saved; } catch { /* first run */ }
+setInterval(() => { try { writeFileSync(usdPath, JSON.stringify(aiUsage.day)); } catch { /* best effort */ } }, 60_000);
+let capWarned = ""; let gateWarnAt = 0;
+function withinDailyUsd(event: { highPriority?: boolean }): boolean {
+  if (aiUsage.day.usd < config.AI_DAILY_USD_CAP || event.highPriority) return true;
+  if (capWarned !== aiUsage.day.date) { capWarned = aiUsage.day.date; log.warn({ usd: +aiUsage.day.usd.toFixed(2), cap: config.AI_DAILY_USD_CAP }, "Daily AI dollar cap reached; only high-priority news reaches Sol until 07:00 WIB"); }
+  return false;
+}
 let lastSpeechScan = 0;
 /** Owner rule: official remarks on policy, prices, trade or war must be published. Capped per hour so a burst can never trip safe mode. */
 const forcedAt: number[] = [];
@@ -546,12 +563,13 @@ async function tick(): Promise<void> {
 function articleDeps(): Parameters<typeof processArticle>[1] {
   return {
     store, snapshot: marketSnapshot,
-    analyze: (item, event) => aiAllowed(event.sourceTier) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
-    shadow: (item, event) => aiAllowed(event.sourceTier) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
+    analyze: (item, event) => aiAllowed(event.sourceTier) && withinDailyUsd(event) ? editor.assess(item) : Promise.reject(new Error("AI budget exhausted")),
+    shadow: (item, event) => aiAllowed(event.sourceTier) && withinDailyUsd(event) ? editor.shadowAssess(item, event, store.getStory(event.storyKey)) : Promise.reject(new Error("AI budget exhausted")),
     deliver,
     compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
     onSent: recordPrediction,
     mustSend: (item) => mustSendRemark(item),
+    gate: gateEditor ? async (item) => { try { return await gateEditor.gate(item, recentForGate()); } catch (error) { if (Date.now() - gateWarnAt > 600_000) { gateWarnAt = Date.now(); log.warn({ err: error, model: config.GATE_MODEL }, "News gate failed; items go straight to Sol"); } throw error; } } : undefined,
     important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
     facts: async (item) => ({
       page: needsFacts(item.title, item.summary) ? await fetchFacts(item.url).catch(() => "") : "",
