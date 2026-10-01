@@ -53,7 +53,7 @@ test("an official remark Sol calls minor is still published (must-send), and tie
     const store = new IntelligenceStore(join(mkdtempSync(join(tmpdir(), "xau-must-")), "state.json"));
     const r = await processArticle(a, { store, analyze: async () => ({ material: false, confidence: "low", reason: "minor", telegramMessage: null }),
       shadow: async () => ({ material: false, score: 20, reason: "minor" }), compose: async () => ({ message: prose }),
-      deliver: async (m) => { sent.push(m); return { chat: 1 }; }, mustSend });
+      deliver: async (m) => { sent.push(m); return { chat: 1 }; }, mustSend, forceOfficial: true });
     return { r, sent };
   };
   const forced = await run(article, () => true);
