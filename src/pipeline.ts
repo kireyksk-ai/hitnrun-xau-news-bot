@@ -31,6 +31,8 @@ export type PipelineDeps = {
   important?: (article: NewsArticle, event: EventAssessment) => boolean;
   /** Optional: owner rule: an official's remark on policy/inflation/trade/war must be published once found (still deduplicated and source-checked). */
   mustSend?: (article: NewsArticle, event: EventAssessment) => boolean;
+  /** Optional: publish official remarks Sol rated minor (owner turned this OFF on 2026-10-01: minor remarks were noise). */
+  forceOfficial?: boolean;
   /** Optional: cheap gatekeeper before the expensive desk (Sol); pass=false stops here without a Sol call. */
   gate?: (article: NewsArticle, event: EventAssessment) => Promise<{ pass: boolean; reason: string }>;
   critic?: (article: NewsArticle, event: EventAssessment, primary: EditorialDecision | undefined, reason: string) => Promise<import("./brain-episodes.js").CriticResult>;
@@ -230,7 +232,7 @@ export async function processArticle(article: NewsArticle, deps: PipelineDeps): 
   // Owner rule: an official remark from a trusted source goes out even when Sol calls it minor; Sol still writes the text.
   // Owner rule (2026-09-26): when Sol itself calls the item a repeat / no new fact, nothing overrides that verdict
   // (not the shadow reviewer, not the official-remark rule). Repeats were flooding the groups.
-  const forced = must && corroborated && !deterministicPublish && !plausiblePublish && !saysRepeat;
+  const forced = Boolean(deps.forceOfficial) && must && corroborated && !deterministicPublish && !plausiblePublish && !saysRepeat;
   const publish = (deterministicPublish || plausiblePublish || forced) && !saysRepeat;
   record = { ...record, brain: { internal: primary?.internal }, stage: highRiskMiss ? "SHADOW" : "AI", primaryDecision: publish ? "SEND" : "DROP",
     reason: forced ? `OFFICIAL_REMARK_MUST_SEND; ${primary?.reason ?? "Primary AI unavailable"}` : primary?.reason ?? "Primary AI unavailable", shadowDecision: shadow?.material ? "SEND" : "DROP", shadowScore: shadow?.score,

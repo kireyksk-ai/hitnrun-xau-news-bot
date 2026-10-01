@@ -19,6 +19,7 @@ import { InvestingLiveProvider } from "./providers/investinglive.js";
 import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.js";
 import { formatRecap, recapDue } from "./recap.js";
 import { aiUsage } from "./ai-usage.js";
+import { deskHeadlines, deskOutput, deskPrompt, dueDeskSlot } from "./desk-update.js";
 import { recoveryDigest } from "./outage-recovery.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
@@ -387,6 +388,30 @@ function withinDailyUsd(event: { highPriority?: boolean }): boolean {
   if (capWarned !== aiUsage.day.date) { capWarned = aiUsage.day.date; log.warn({ usd: +aiUsage.day.usd.toFixed(2), cap: config.AI_DAILY_USD_CAP }, "Daily AI dollar cap reached; only high-priority news reaches Sol until 07:00 WIB"); }
   return false;
 }
+/** Desk update: one regime note per slot when the picture changed (see desk-update.ts). */
+const deskPath = `${config.SQLITE_PATH}.desk.json`;
+let desk: { slots: string[]; last: string; lastAt: number } = (() => { try { return JSON.parse(readFileSync(deskPath, "utf8")); } catch { return { slots: [], last: "", lastAt: Date.now() - 3 * 3_600_000 }; } })();
+let deskBusy = false;
+async function deskTick(): Promise<void> {
+  if (!config.DESK_UPDATES_ENABLED || deskBusy || store.safeMode) return;
+  const slot = dueDeskSlot(new Date(), new Set(desk.slots));
+  if (!slot) return;
+  deskBusy = true;
+  try {
+    desk.slots = [...desk.slots.slice(-30), slot];
+    const since = Math.max(desk.lastAt, Date.now() - 4 * 3_600_000);
+    const headlines = deskHeadlines(readArchive(`${config.SQLITE_PATH}.raw`, new Date(), 2).map((a) => ({ ...a.item, fetchedAt: a.fetchedAt })), since);
+    if (headlines.length < 5) { log.info({ slot, headlines: headlines.length }, "Desk update skipped: too few headlines"); return; }
+    const sentAlerts = store.records().filter((r) => r.stage === "SENT" && r.sentAt && Date.parse(r.sentAt) >= since).map((r) => r.article.title.replace(/^@\w+:\s*/, "").slice(0, 140));
+    const text = await editor.briefing(deskPrompt({ nowWib: `${slot.slice(11)}:00 WIB`, headlines, market: await marketSnapshot().catch(() => ""), remarks: officialContext(4, 15), sentAlerts, lastUpdate: desk.last }));
+    const post = deskOutput(text);
+    if (!post) { log.info({ slot, headlines: headlines.length, reason: /TIDAK_ADA_UPDATE/.test(text) ? "no change" : "rejected" }, "Desk update not sent"); return; }
+    const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, post, store);
+    desk.last = text.slice(0, 1500); desk.lastAt = Date.now(); recentSendTimes.push(Date.now());
+    log.info({ slot, headlines: headlines.length, accepted: Object.keys(accepted).length }, "Desk update sent");
+  } catch (error) { log.warn({ err: error, slot }, "Desk update failed"); }
+  finally { try { writeFileSync(deskPath, JSON.stringify(desk)); } catch { /* best effort */ } deskBusy = false; }
+}
 let lastSpeechScan = 0;
 /** Owner rule: official remarks on policy, prices, trade or war must be published. Capped per hour so a burst can never trip safe mode. */
 const forcedAt: number[] = [];
@@ -569,6 +594,7 @@ function articleDeps(): Parameters<typeof processArticle>[1] {
     compose: (item, reason) => aiAllowed() ? editor.compose(item, reason) : Promise.resolve(null),
     onSent: recordPrediction,
     mustSend: (item) => mustSendRemark(item),
+    forceOfficial: config.OFFICIAL_REMARKS_FORCE_SEND,
     gate: gateEditor ? async (item) => { try { return await gateEditor.gate(item, recentForGate()); } catch (error) { if (Date.now() - gateWarnAt > 600_000) { gateWarnAt = Date.now(); log.warn({ err: error, model: config.GATE_MODEL }, "News gate failed; items go straight to Sol"); } throw error; } } : undefined,
     important: brain ? (item, event) => mustReview(`${item.title} ${item.summary.slice(0, 400)}`, event.sourceTier) : undefined,
     facts: async (item) => ({
@@ -667,6 +693,7 @@ if (brain) {
 }
 // Hourly AI spend by purpose, so the expensive part is visible in Render logs ("AI usage summary").
 setInterval(() => { const u = aiUsage.flush(); if (u.total.calls) log.info(u, "AI usage summary"); }, 3_600_000);
+setInterval(() => void deskTick().catch((error) => log.warn({ err: error }, "Desk tick failed")), 30_000);
 setInterval(() => void briefingTick().catch((error) => log.error({ err: error }, "Briefing tick failed")), 30000);
 setInterval(() => void tick().catch((error) => log.error({ err: error }, "Pipeline tick failed")), 5000);
 if (config.ECONOMIC_CALENDAR_ENABLED) {
