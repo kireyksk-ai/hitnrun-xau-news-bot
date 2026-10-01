@@ -63,6 +63,12 @@ export class GoogleNewsRssProvider implements NewsProvider {
     const bloombergUrl = new URL(googleUrl);
     bloombergUrl.searchParams.set("q", "site:bloomberg.com when:1h");
     const bloomberg = await fetchXml(bloombergUrl).then((xml) => parseFeed(xml, since, this.name)).catch(() => [] as NewsArticle[]);
+    // Reuters/AP/WSJ discovery for the macro plumbing the broad query buries (owner 2026-10-01: 10Y 24-year high,
+    // diesel export bans, Tankan, ADP, Fed officials were missed). Same parser; the gatekeeper drops repeats cheaply.
+    const deskUrl = new URL(googleUrl);
+    deskUrl.searchParams.set("q", '(site:reuters.com OR site:apnews.com OR site:wsj.com) (Treasury OR yields OR dollar OR diesel OR refinery OR "export ban" OR Fed OR BOJ OR Tankan OR ADP OR payrolls OR Hormuz OR tanker OR Iran OR gold) when:2h');
+    const desk = await fetchXml(deskUrl).then((xml) => parseFeed(xml, since, this.name)).catch(() => [] as NewsArticle[]);
+    bloomberg.push(...desk);
     try {
       return [...parseFeed(await fetchXml(googleUrl), since, this.name), ...bloomberg];
     } catch (googleError) {
