@@ -21,6 +21,9 @@ import { formatRecap, recapDue } from "./recap.js";
 import { aiUsage } from "./ai-usage.js";
 import { deskHeadlines, deskOutput, deskPrompt, dueDeskSlot } from "./desk-update.js";
 import { weekendClosed } from "./weekend.js";
+import { plainPost, webMarker, webSafe } from "./web-feed.js";
+import { formatChannelPost, formatMembers, formatRequest, Members, type AccessRequest } from "./members.js";
+import { botUsername, createSingleUseInvite, removeFromChat } from "./telegram.js";
 import { recoveryDigest } from "./outage-recovery.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
@@ -224,6 +227,32 @@ function aiAllowed(sourceTier = 1): boolean {
   }
   return store.reserveAiCall("editor", day, limit);
 }
+/** Mirrors a sent post to the FastXAUNews website in English (see web-feed.ts). Never throws. */
+async function publishWeb(message: string, id: string, kind: "alert" | "desk"): Promise<void> {
+  if (!config.WEB_FEED_URL || !config.WEB_FEED_SECRET || !gateEditor) return;
+  try {
+    const plain = plainPost(message);
+    const en = await gateEditor.webRewrite(plain, kind);
+    if (!en.headline || !webSafe(`${en.headline} ${en.note} ${en.watch}`)) { log.info({ id, kind }, "Web feed item skipped by safety check"); return; }
+    if (config.TELEGRAM_CHAT_ID_EN) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_CHAT_ID_EN }, formatChannelPost(kind, kind === "desk" ? "yellow" : webMarker(message), en))
+      .catch((error) => log.warn({ err: error, id }, "Real-time channel post failed"));
+    const res = await fetch(`${config.WEB_FEED_URL}/api/ingest`, { method: "POST", headers: { "content-type": "application/json", "x-ingest-secret": config.WEB_FEED_SECRET },
+      body: JSON.stringify({ id, at: new Date().toISOString(), kind, marker: kind === "desk" ? "yellow" : webMarker(message), headline: en.headline, note: en.note, category: en.category, impact: en.impact, watch: en.watch }), signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`ingest ${res.status}`);
+    log.info({ id, kind }, "Web feed item published");
+  } catch (error) { log.warn({ err: error, id, kind }, "Web feed publish failed"); }
+}
+let botName = "";
+/** Ticker prices for the FastXAUNews website (no AI involved). Never throws. */
+async function publishMarket(values: Record<string, { price?: number; changePercent?: number | null; quality?: string }>): Promise<void> {
+  if (!config.WEB_FEED_URL || !config.WEB_FEED_SECRET) return;
+  const pick = Object.fromEntries(["XAUUSD", "DXY", "US10Y", "WTI"].filter((k) => values[k]?.price).map((k) => [k, { price: values[k].price, changePercent: values[k].changePercent ?? null }]));
+  if (!Object.keys(pick).length) return;
+  try {
+    await fetch(`${config.WEB_FEED_URL}/api/ingest`, { method: "POST", headers: { "content-type": "application/json", "x-ingest-secret": config.WEB_FEED_SECRET },
+      body: JSON.stringify({ type: "market", values: pick, bot: botName || (botName = await botUsername(config.TELEGRAM_BOT_TOKEN).catch(() => "")) }), signal: AbortSignal.timeout(10_000) });
+  } catch { /* ticker is cosmetic */ }
+}
 async function deliver(message: string, id: string, article: import("./types.js").NewsArticle): Promise<Record<string, number>> {
   const outputCheck = validateNewsOutput(message, article);
   if (!outputCheck.ok) throw new Error(`NEWS output gate rejected ${id}: ${outputCheck.reason}`);
@@ -246,7 +275,7 @@ async function deliver(message: string, id: string, article: import("./types.js"
   }
   const { accepted, failures } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN,destinations,message,store);
   for (const failure of failures) log.error({ chatId: failure.chatId, id, error: failure.error }, "Telegram destination failed");
-  if (Object.keys(accepted).length) recentSendTimes.push(Date.now());
+  if (Object.keys(accepted).length) { recentSendTimes.push(Date.now()); void publishWeb(message, id, "alert"); }
   return accepted;
 }
 async function replayQueued(): Promise<number> {
@@ -411,6 +440,7 @@ async function deskTick(): Promise<void> {
     const { accepted } = await deliverTelegramMessage(config.TELEGRAM_BOT_TOKEN, destinations, post, store);
     desk.last = text.slice(0, 1500); desk.lastAt = Date.now(); recentSendTimes.push(Date.now());
     log.info({ slot, headlines: headlines.length, accepted: Object.keys(accepted).length }, "Desk update sent");
+    if (Object.keys(accepted).length) void publishWeb(post, `desk-${slot}`, "desk");
   } catch (error) { log.warn({ err: error, slot }, "Desk update failed"); }
   finally { try { writeFileSync(deskPath, JSON.stringify(desk)); } catch { /* best effort */ } deskBusy = false; }
 }
@@ -484,6 +514,35 @@ async function coverageTick(): Promise<void> {
     if (config.TELEGRAM_ADMIN_CHAT_ID) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").slice(0, 3900));
   } catch (error) { log.warn({ err: error }, "Coverage audit failed"); }
 }
+const members = new Members(`${config.SQLITE_PATH}.members.json`);
+let lastRequestPoll = 0;
+/** New access requests from the website go to the admin chat for a manual partner-area check. No AI. */
+async function requestTick(): Promise<void> {
+  if (!config.WEB_FEED_URL || !config.WEB_FEED_SECRET || !config.TELEGRAM_ADMIN_CHAT_ID || Date.now() - lastRequestPoll < 60_000) return;
+  lastRequestPoll = Date.now();
+  try {
+    const res = await fetch(`${config.WEB_FEED_URL}/api/request?after=${encodeURIComponent(members.lastRequestAt)}`, { headers: { "x-ingest-secret": config.WEB_FEED_SECRET }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`requests ${res.status}`);
+    const { requests = [] } = await res.json() as { requests?: AccessRequest[] };
+    for (const r of requests.sort((a, b) => a.at.localeCompare(b.at))) {
+      const m = members.addRequest(r);
+      await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, formatRequest(r, m));
+    }
+  } catch (error) { log.warn({ err: error }, "Access request poll failed"); }
+}
+const EXNESS_LINK = "https://one.exnessonelink.com/boarding/sign-up/303589/a/esjmyd0i8e?lng=en";
+async function sendInvite(account: string): Promise<string> {
+  const m = members.get(account);
+  if (!m) return `Akun ${account} tidak ada di daftar pendaftar web.`;
+  if (!config.TELEGRAM_CHAT_ID_EN) return "Channel real-time belum diset (TELEGRAM_CHAT_ID_EN di Render).";
+  const link = await createSingleUseInvite(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID_EN, `fxn-${account}`);
+  members.setStatus(account, "approved");
+  if (m.chatId) {
+    await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: String(m.chatId) }, `✅ <b>Your account is verified.</b>\n\nHere is your private invite to FastXAUNews Real-Time (single use, valid 7 days):\n${link}\n\nAccess stays active while your Exness account is trading.`);
+    return `✅ ${account} disetujui. Link undangan sudah dikirim ke @${m.telegram}.`;
+  }
+  return `✅ ${account} disetujui, tapi @${m.telegram} belum Start bot. Kirim link ini manual ke dia (sekali pakai, 7 hari):\n${link}`;
+}
 async function pollAdmin(): Promise<void> {
   if (!config.TELEGRAM_ADMIN_CHAT_ID || !config.TELEGRAM_ADMIN_USER_ID || adminPolling) return;
   adminPolling = true;
@@ -491,6 +550,19 @@ async function pollAdmin(): Promise<void> {
     for (const update of await fetchAdminUpdates(config.TELEGRAM_BOT_TOKEN, store.updateOffset)) {
       store.setUpdateOffset(update.update_id + 1);
       const m = update.message;
+      if (m?.chat?.type === "private" && m.from?.id && m.chat.id && String(m.chat.id) !== config.TELEGRAM_ADMIN_CHAT_ID) {
+        if ((m.text ?? "").startsWith("/start")) {
+          const linked = members.recordStart(m.from.username, m.from.id, m.chat.id);
+          const approved = linked.find((x) => x.status === "approved");
+          const text = !m.from.username ? "Welcome to FastXAUNews. Please set a Telegram username (Settings → Username), then press /start again so we can match your request."
+            : approved ? "Welcome back. Your account is already verified; the admin will resend your invite if needed."
+            : linked.length ? "Thanks! Your request is in the queue. Once your Exness account is verified, your private invite arrives right here."
+            : `Welcome to FastXAUNews. To get real-time gold alerts, open an Exness account via ${EXNESS_LINK} and send your account number on our website.`;
+          await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: String(m.chat.id) }, text).catch(() => undefined);
+          if (linked.length && config.TELEGRAM_ADMIN_CHAT_ID) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID }, `ℹ️ @${linked[0].telegram} sudah Start bot (akun ${linked.map((x) => x.account).join(", ")}).`).catch(() => undefined);
+        }
+        continue;
+      }
       if (String(m?.chat?.id) !== config.TELEGRAM_ADMIN_CHAT_ID || m?.from?.id !== config.TELEGRAM_ADMIN_USER_ID) continue;
       const input = m.text?.trim() ?? "";
       const reply = async (text: string) => sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_ADMIN_CHAT_ID! }, text);
@@ -510,6 +582,27 @@ async function pollAdmin(): Promise<void> {
       else if (input === "/backtest") await reply((backtest?.status() ?? "Backtest nonaktif").slice(0, 3900));
       else if (input === "/corong") await reply(formatFunnel(funnel(new Date().toISOString().slice(0, 10), readArchive(`${config.SQLITE_PATH}.raw`), store.records())).slice(0, 3900));
       else if (input === "/replay") await reply(`Replay terkirim: ${await replayQueued()}`);
+      else if (input === "/member") await reply(formatMembers(members.all()));
+      else if (input.startsWith("/approve ")) { for (const acc of input.split(/\s+/).slice(1)) await reply(await sendInvite(acc).catch((e) => `Gagal approve ${acc}: ${e instanceof Error ? e.message : e}`)); }
+      else if (input.startsWith("/tolak ")) {
+        for (const acc of input.split(/\s+/).slice(1)) {
+          const x = members.setStatus(acc, "rejected");
+          if (x?.chatId) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: String(x.chatId) }, `We could not find Exness account ${acc} under our partner code. Open an account through ${EXNESS_LINK} and send the new account number on our website.`).catch(() => undefined);
+          await reply(x ? `❌ ${acc} ditolak${x.chatId ? " (orangnya sudah diberi tahu)" : ""}.` : `Akun ${acc} tidak ditemukan.`);
+        }
+      }
+      else if (input.startsWith("/keluarkan ")) {
+        for (const acc of input.split(/\s+/).slice(1)) {
+          const x = members.get(acc);
+          if (!x) { await reply(`Akun ${acc} tidak ditemukan.`); continue; }
+          let note = "";
+          if (x.userId && config.TELEGRAM_CHAT_ID_EN) await removeFromChat(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID_EN, x.userId).catch((err) => { note = ` (gagal keluarkan dari channel: ${err instanceof Error ? err.message : err})`; });
+          else note = " (user ID belum diketahui; keluarkan manual dari channel)";
+          members.setStatus(acc, "removed");
+          if (x.chatId) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: String(x.chatId) }, "Your FastXAUNews real-time access has ended because the linked Exness account had no trading activity in the last 30 days. Start trading again and send a new request on our website to rejoin.").catch(() => undefined);
+          await reply(`🚪 ${acc} dikeluarkan${note}.`);
+        }
+      }
       else if (input.startsWith("/fn ") || input.startsWith("/fp ")) {
         const decision = input.startsWith("/fn ") ? "FALSE_NEGATIVE" : "FALSE_POSITIVE";
         const payload = input.slice(4).trim();
@@ -536,13 +629,13 @@ async function tick(): Promise<void> {
     // Weekend close: no polling, no posts, no AI from Saturday 00:00 to Monday 04:00 WIB; admin commands still answer.
     const closed = weekendClosed();
     if (closed !== weekendWasClosed) { weekendWasClosed = closed; log.info({ closed }, closed ? "Weekend close: news and AI off until Monday 04:00 WIB" : "Weekend close ended: news back on"); }
-    if (closed) { await pollAdmin(); return; }
-    await pollAdmin(); await adminReport(); await coverageTick();
+    if (closed) { await pollAdmin(); await requestTick(); return; }
+    await pollAdmin(); await requestTick(); await adminReport(); await coverageTick();
     try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
     if (Date.now() - lastMarketObservationAt >= config.MARKET_OBSERVER_INTERVAL_SECONDS * 1000) {
       lastMarketObservationAt = Date.now();
-      try { const observed = await observeMarket(store); log.info({ kind: observed.decision.kind, attribution: observed.decision.attribution, assets: Object.keys(observed.point.values).length }, "Shadow market observer completed"); }
+      try { const observed = await observeMarket(store); log.info({ kind: observed.decision.kind, attribution: observed.decision.attribution, assets: Object.keys(observed.point.values).length }, "Shadow market observer completed"); void publishMarket(observed.point.values); }
       catch (error) { log.warn({ err: error }, "Shadow market observer failed"); }
     }
     // Never replay old outage-era headlines individually after credits recover.
