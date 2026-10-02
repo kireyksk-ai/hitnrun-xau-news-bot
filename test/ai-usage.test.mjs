@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AiUsage, meter } from "../dist/ai-usage.js";
+process.env.WEEKEND_CLOSE_ENABLED = "false"; // these tests are about counting, not the weekend close
 
 test("usage is counted per purpose with cached and reasoning tokens, then reset", () => {
   const u = new AiUsage();
