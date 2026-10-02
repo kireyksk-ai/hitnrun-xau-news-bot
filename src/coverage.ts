@@ -32,19 +32,45 @@ export function statusOf(r: ReviewRecord): Exclude<TraceStatus, "TIDAK_DITEMUKAN
 const RANK: Record<TraceStatus, number> = { TERKIRIM: 6, DITAHAN: 5, DITOLAK: 4, DUPLIKAT: 3, DITEMUKAN_BELUM_DIPROSES: 2, TIDAK_DITEMUKAN: 1 };
 const reasonCode = (reason: string) => reason.split(/[:;(]/)[0].trim().slice(0, 60);
 
-/** Reads the last `days` daily JSONL files (tail-capped per file), unique by provider+id. */
+/**
+ * Reads the last `days` daily JSONL files (tail-capped per file), unique by provider+id.
+ * Incremental and slim (OOM fix 2026-10-03: the worker re-parsed up to 3 x 40 MB every minute for the official-remarks
+ * context and ran out of heap): each file is parsed once, then only the appended bytes, in 8 MB chunks, and only the
+ * fields the callers use are kept (title, a 600-char summary, ids, times).
+ */
+type FileCache = { pos: number; entries: Map<string, ArchiveEntry> };
+const archiveCache = new Map<string, FileCache>();
+const CHUNK = 8_000_000;
+const slim = (e: ArchiveEntry): ArchiveEntry => ({ fetchedAt: e.fetchedAt, provider: e.provider, item: { title: e.item?.title?.slice(0, 400),
+  summary: e.item?.summary?.slice(0, 600), url: e.item?.url, providerId: e.item?.providerId, publishedAt: e.item?.publishedAt, sourceName: e.item?.sourceName } });
 export function readArchive(dir: string, now = new Date(), days = 2, maxBytes = 40_000_000): ArchiveEntry[] {
   const seen = new Map<string, ArchiveEntry>();
   for (let d = days - 1; d >= 0; d--) {
     const file = join(dir, `${new Date(now.getTime() - d * 86400_000).toISOString().slice(0, 10)}.jsonl`);
     if (!existsSync(file)) continue;
-    const size = statSync(file).size, start = Math.max(0, size - maxBytes);
-    const buf = Buffer.alloc(size - start); const fd = openSync(file, "r"); readSync(fd, buf, 0, buf.length, start); closeSync(fd);
-    for (const line of buf.toString("utf8").split("\n")) {
-      if (!line.startsWith("{")) continue;
-      try { const e = JSON.parse(line) as ArchiveEntry; const key = `${e.provider}|${e.item?.providerId ?? e.item?.url ?? e.item?.title}`; if (!seen.has(key)) seen.set(key, e); } catch { /* partial line */ }
+    const size = statSync(file).size;
+    let c = archiveCache.get(file);
+    if (!c || size < c.pos) { c = { pos: Math.max(0, size - maxBytes), entries: new Map() }; archiveCache.set(file, c); }
+    if (size > c.pos) {
+      const fd = openSync(file, "r");
+      try {
+        while (c.pos < size) {
+          const len = Math.min(CHUNK, size - c.pos), buf = Buffer.alloc(len);
+          readSync(fd, buf, 0, len, c.pos);
+          const cut = buf.lastIndexOf(10);
+          if (cut < 0) { if (len === CHUNK) { c.pos += len; continue; } break; } // wait for the line to finish
+          for (const line of buf.subarray(0, cut).toString("utf8").split("\n")) {
+            if (!line.startsWith("{")) continue;
+            try { const e = JSON.parse(line) as ArchiveEntry; const key = `${e.provider}|${e.item?.providerId ?? e.item?.url ?? e.item?.title}`; if (!c.entries.has(key)) c.entries.set(key, slim(e)); } catch { /* partial line */ }
+          }
+          c.pos += cut + 1;
+        }
+      } finally { closeSync(fd); }
     }
+    for (const [key, e] of c.entries) if (!seen.has(key)) seen.set(key, e);
   }
+  const oldest = new Date(now.getTime() - 4 * 86400_000).toISOString().slice(0, 10);
+  for (const file of archiveCache.keys()) { const day = file.slice(-16, -6); if (day < oldest) archiveCache.delete(file); }
   return [...seen.values()];
 }
 
