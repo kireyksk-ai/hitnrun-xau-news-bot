@@ -44,6 +44,20 @@ test("archive reader keeps one entry per provider item across repeated polls", (
   writeFileSync(join(dir, `${day}.jsonl`), line(entry("benzinga", "b", "x")) + line(entry("benzinga", "b", "x")) + line(entry("twitter-wire", "a", "y")) + "{broken");
   assert.equal(readArchive(dir, new Date(`${day}T20:00:00Z`), 1).length, 2);
 });
+test("archive reader is incremental: appended lines show up, half-written lines wait, summaries are trimmed", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "raw-inc-"));
+  const file = join(dir, `${day}.jsonl`), now = new Date(`${day}T20:00:00Z`);
+  const big = { ...entry("benzinga", "s", "long"), item: { ...entry("benzinga", "s", "long").item, summary: "z".repeat(5000) } };
+  writeFileSync(file, JSON.stringify(entry("benzinga", "a", "first")) + "\n" + JSON.stringify(big) + "\n");
+  assert.equal(readArchive(dir, now, 1).length, 2);
+  assert.equal(readArchive(dir, now, 1).find((e) => e.item.providerId === "s").item.summary.length, 600);
+  const half = JSON.stringify(entry("twitter-wire", "b", "second"));
+  appendFileSync(file, half.slice(0, 20));
+  assert.equal(readArchive(dir, now, 1).length, 2, "half-written line is not consumed");
+  appendFileSync(file, half.slice(20) + "\n" + JSON.stringify(entry("benzinga", "a", "first")) + "\n");
+  assert.deepEqual(readArchive(dir, now, 1).map((e) => e.item.providerId).sort(), ["a", "b", "s"]);
+});
 test("facts extractor keeps the sentences with numbers and comparisons, calendar match adds the official print", () => {
   const html = `<html><body><nav>Menu 123</nav><article><p>Markets were busy on Thursday as traders digested a range of news items.</p>
     <p>The S&P Global flash US manufacturing PMI rose to 58.4 in September from 53.0, well above the 52.0 economists had expected.</p>
