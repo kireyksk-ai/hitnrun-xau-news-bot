@@ -20,6 +20,7 @@ import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.
 import { formatRecap, recapDue } from "./recap.js";
 import { aiUsage } from "./ai-usage.js";
 import { deskHeadlines, deskOutput, deskPrompt, dueDeskSlot } from "./desk-update.js";
+import { weekendClosed } from "./weekend.js";
 import { recoveryDigest } from "./outage-recovery.js";
 import { FxMacroDataProvider } from "./providers/fxmacrodata.js";
 import { NewsApiProvider } from "./providers/newsapi.js";
@@ -263,6 +264,7 @@ async function replayQueued(): Promise<number> {
 }
 async function calendarTick(): Promise<void> {
   if (!calendarLedger || calendarTicking) return;
+  if (weekendClosed()) { lastCalendarProgressAt = Date.now(); return; } // weekend close: nothing to any group
   calendarTicking = true;
   try {
     const now = Date.now();
@@ -393,7 +395,7 @@ const deskPath = `${config.SQLITE_PATH}.desk.json`;
 let desk: { slots: string[]; last: string; lastAt: number } = (() => { try { return JSON.parse(readFileSync(deskPath, "utf8")); } catch { return { slots: [], last: "", lastAt: Date.now() - 3 * 3_600_000 }; } })();
 let deskBusy = false;
 async function deskTick(): Promise<void> {
-  if (!config.DESK_UPDATES_ENABLED || deskBusy || store.safeMode) return;
+  if (!config.DESK_UPDATES_ENABLED || deskBusy || store.safeMode || weekendClosed()) return;
   const slot = dueDeskSlot(new Date(), new Set(desk.slots));
   if (!slot) return;
   deskBusy = true;
@@ -526,10 +528,15 @@ async function pollAdmin(): Promise<void> {
   } catch (error) { log.error({ err: error }, "Admin command polling failed"); }
   finally { adminPolling = false; }
 }
+let weekendWasClosed = false;
 async function tick(): Promise<void> {
   if (ticking) return; ticking = true;
   try {
     lastPipelineProgressAt = Date.now();
+    // Weekend close: no polling, no posts, no AI from Saturday 00:00 to Monday 04:00 WIB; admin commands still answer.
+    const closed = weekendClosed();
+    if (closed !== weekendWasClosed) { weekendWasClosed = closed; log.info({ closed }, closed ? "Weekend close: news and AI off until Monday 04:00 WIB" : "Weekend close ended: news back on"); }
+    if (closed) { await pollAdmin(); return; }
     await pollAdmin(); await adminReport(); await coverageTick();
     try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().

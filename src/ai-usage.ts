@@ -58,9 +58,13 @@ export class AiUsage {
 export const aiUsage = new AiUsage();
 
 /** Wraps an OpenAI client so every responses.create call is recorded under its schema name (or "briefing"). */
-export function meter<T extends { responses: { create: (...args: any[]) => any } }>(client: T): T {
+import { weekendClosed } from "./weekend.js";
+
+export function meter<T extends { responses: { create: (...args: any[]) => any } }>(client: T, closed: () => boolean = () => weekendClosed()): T {
   const original = client.responses.create.bind(client.responses);
   (client.responses as { create: unknown }).create = async (body: { model?: string; text?: { format?: { name?: string } } }, ...rest: unknown[]) => {
+    // Weekend close: no OpenAI call can leave the process between Saturday 00:00 and Monday 04:00 WIB.
+    if (closed()) throw new Error("Weekend close: AI is off until Monday 04:00 WIB");
     const response = await original(body, ...rest);
     aiUsage.record(body?.text?.format?.name ?? "briefing", (response as { usage?: unknown })?.usage, body?.model);
     return response;
