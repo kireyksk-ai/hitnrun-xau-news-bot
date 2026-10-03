@@ -59,7 +59,7 @@ export const normaliseUsername = (value: string) => value.trim().replace(/^https
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function formatRequest(r: AccessRequest, m: Member): string {
-  return [`🆕 <b>Pendaftar FastXAUNews</b>`, `Akun Exness: <code>${esc(r.account)}</code>`, r.path === "switch" ? "Jalur: 🔁 <b>PINDAH IB</b> (akun lama dari partner lain; pastikan sudah benar-benar pindah ke 303589)" : "Jalur: 🆕 akun baru lewat link IB", `Telegram: @${esc(m.telegram)}${m.chatId ? " (sudah Start bot ✓)" : " (belum Start bot)"}`,
+  return [`🆕 <b>Pendaftar FastXAUNews</b>`, `Akun Exness: <code>${esc(r.account)}</code>`, r.path === "switch" ? "Jalur: 🔁 <b>PINDAH IB</b> (akun lama dari partner lain; pastikan sudah benar-benar pindah ke kode partner 1044920275187099225)" : "Jalur: 🆕 akun baru lewat link IB", `Telegram: @${esc(m.telegram)}${m.chatId ? " (sudah Start bot ✓)" : " (belum Start bot)"}`,
     `Email: ${esc(r.email)}`, r.country ? `Negara: ${esc(r.country)}` : "", r.notes ? `Catatan: ${esc(r.notes)}` : "",
     "", `Cek akun ini di Partner Area Exness, lalu balas:`, `<code>/approve ${esc(r.account)}</code> atau <code>/tolak ${esc(r.account)}</code>`].filter((l) => l !== "").join("\n");
 }
