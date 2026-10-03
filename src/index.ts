@@ -242,6 +242,22 @@ async function publishWeb(message: string, id: string, kind: "alert" | "desk"): 
     log.info({ id, kind }, "Web feed item published");
   } catch (error) { log.warn({ err: error, id, kind }, "Web feed publish failed"); }
 }
+let lastCalendarPush = { at: 0, hash: "" };
+/** Economic calendar for the FastXAUNews website (no AI): pushed when it changes, at most once a minute. Never throws. */
+async function publishCalendar(): Promise<void> {
+  if (!config.WEB_FEED_URL || !config.WEB_FEED_SECRET || Date.now() - lastCalendarPush.at < 60_000) return;
+  const now = Date.now();
+  const events = calendarEvents.filter((e) => e.impact !== "low" && Date.parse(e.releaseAt) >= now - 2 * 86400_000 && Date.parse(e.releaseAt) <= now + 8 * 86400_000)
+    .map((e) => ({ id: e.id, name: e.name, currency: currencyOf(e), releaseAt: e.releaseAt, impact: e.impact, consensus: e.consensus, prior: e.prior, actual: e.actual }));
+  const hash = JSON.stringify(events);
+  if (hash === lastCalendarPush.hash && now - lastCalendarPush.at < 30 * 60_000) return;
+  lastCalendarPush = { at: now, hash };
+  try {
+    const res = await fetch(`${config.WEB_FEED_URL}/api/ingest`, { method: "POST", headers: { "content-type": "application/json", "x-ingest-secret": config.WEB_FEED_SECRET },
+      body: JSON.stringify({ type: "calendar", events }), signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`calendar ingest ${res.status}`);
+  } catch (error) { lastCalendarPush.hash = ""; log.warn({ err: error }, "Web calendar publish failed"); }
+}
 let botName = "";
 /** Ticker prices for the FastXAUNews website (no AI involved). Never throws. */
 async function publishMarket(values: Record<string, { price?: number; changePercent?: number | null; quality?: string }>): Promise<void> {
@@ -314,6 +330,7 @@ async function calendarTick(): Promise<void> {
         if (missingActual.length) log.warn({ events: missingActual.map((event) => event.name) }, "Calendar release still has no actual; no result will be invented");
       } catch (error) { log.warn({ err: error }, "Economic calendar refresh failed; keeping prior schedule"); }
     }
+    void publishCalendar();
     const doneThisTick = new Set<string>();
     for (const event of calendarEvents) {
       if (doneThisTick.has(event.id)) continue;
