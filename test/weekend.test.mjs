@@ -23,3 +23,22 @@ test("metered OpenAI client refuses calls during the weekend close", async () =>
   await open.responses.create({ model: "gpt-5.6-luna" });
   assert.equal(calls, 1);
 });
+
+test("weekend red-only: AI stays available inside the close until the weekend budget is spent", async () => {
+  const { aiBlocked, addWeekendSpend, weekendSpent } = await import("../dist/weekend.js");
+  const sat = new Date("2026-10-03T05:00:00Z"), mon = new Date("2026-10-05T05:00:00Z");
+  const prev = { ro: process.env.WEEKEND_RED_ONLY, cap: process.env.WEEKEND_AI_USD_CAP, en: process.env.WEEKEND_CLOSE_ENABLED };
+  process.env.WEEKEND_CLOSE_ENABLED = "true"; process.env.WEEKEND_AI_USD_CAP = "1.5";
+  try {
+    delete process.env.WEEKEND_RED_ONLY;
+    assert.equal(aiBlocked(mon), false, "weekdays never blocked");
+    assert.equal(aiBlocked(sat), false, "red-only weekend starts open");
+    addWeekendSpend(1.2, sat); assert.equal(aiBlocked(sat), false);
+    addWeekendSpend(0.4, sat); assert.ok(weekendSpent(sat) >= 1.5); assert.equal(aiBlocked(sat), true, "budget spent");
+    assert.equal(aiBlocked(new Date("2026-10-04T05:00:00Z")), false, "new WIB day, new budget");
+    process.env.WEEKEND_RED_ONLY = "false";
+    assert.equal(aiBlocked(new Date("2026-10-04T06:00:00Z")), true, "full close when red-only is off");
+  } finally {
+    for (const [k, v] of [["WEEKEND_RED_ONLY", prev.ro], ["WEEKEND_AI_USD_CAP", prev.cap], ["WEEKEND_CLOSE_ENABLED", prev.en]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
