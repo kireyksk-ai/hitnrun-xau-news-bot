@@ -58,15 +58,19 @@ export class AiUsage {
 export const aiUsage = new AiUsage();
 
 /** Wraps an OpenAI client so every responses.create call is recorded under its schema name (or "briefing"). */
-import { weekendClosed } from "./weekend.js";
+import { addWeekendSpend, aiBlocked, weekendClosed } from "./weekend.js";
 
-export function meter<T extends { responses: { create: (...args: any[]) => any } }>(client: T, closed: () => boolean = () => weekendClosed()): T {
+export function meter<T extends { responses: { create: (...args: any[]) => any } }>(client: T, closed: () => boolean = () => aiBlocked()): T {
   const original = client.responses.create.bind(client.responses);
   (client.responses as { create: unknown }).create = async (body: { model?: string; text?: { format?: { name?: string } } }, ...rest: unknown[]) => {
     // Weekend close: no OpenAI call can leave the process between Saturday 00:00 and Monday 04:00 WIB.
     if (closed()) throw new Error("Weekend close: AI is off until Monday 04:00 WIB");
     const response = await original(body, ...rest);
     aiUsage.record(body?.text?.format?.name ?? "briefing", (response as { usage?: unknown })?.usage, body?.model);
+    if (weekendClosed()) {
+      const u = ((response as { usage?: unknown })?.usage ?? {}) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } };
+      addWeekendSpend(AiUsage.cost({ input: u.input_tokens ?? 0, cached: u.input_tokens_details?.cached_tokens ?? 0, output: u.output_tokens ?? 0, reasoning: 0 }, priceFor(body?.model)) ?? 0);
+    }
     return response;
   };
   return client;

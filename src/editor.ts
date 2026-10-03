@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { WEB_CATEGORIES, WEB_IMPACTS, WEB_REWRITE_GUIDE } from "./web-feed.js";
+import { WEB_CATEGORIES, WEB_IMPACTS, WEB_LANGS, WEB_TOPICS, WEB_REWRITE_GUIDE, type WebTranslation } from "./web-feed.js";
 import { meter } from "./ai-usage.js";
 import { z } from "zod";
 import type { EditorialDecision, NewsArticle } from "./types.js";
@@ -272,17 +272,20 @@ export class Editor {
     return { pass: Boolean(out.pass), reason: `${out.repeat ? "REPEAT: " : ""}${out.reason}`.slice(0, 160) };
   }
   /** English rewrite of a sent post for the public FastXAUNews page (cheap model). */
-  async webRewrite(text: string, kind: "alert" | "desk"): Promise<{ headline: string; note: string; category: string; impact: string; watch: string }> {
-    const schema = { type: "object", additionalProperties: false, required: ["headline", "note", "category", "impact", "watch"], properties: { headline: { type: "string" }, note: { type: "string" },
-      category: { type: "string", enum: [...WEB_CATEGORIES] }, impact: { type: "string", enum: [...WEB_IMPACTS] }, watch: { type: "string" } } };
+  async webRewrite(text: string, kind: "alert" | "desk"): Promise<{ headline: string; summary: string; driver: string; topics: string[]; note: string; why: string; category: string; impact: string; watch: string; tr: Record<string, WebTranslation> }> {
+    const one = { type: "object", additionalProperties: false, required: ["h", "s", "n", "w", "y", "d"], properties: { h: { type: "string" }, s: { type: "string" }, d: { type: "string" }, n: { type: "string" }, w: { type: "string" }, y: { type: "string" } } };
+    const tr = { type: "object", additionalProperties: false, required: [...WEB_LANGS], properties: Object.fromEntries(WEB_LANGS.map((l) => [l, one])) };
+    const schema = { type: "object", additionalProperties: false, required: ["headline", "summary", "note", "why", "driver", "category", "impact", "watch", "topics", "tr"], properties: { headline: { type: "string" }, topics: { type: "array", items: { type: "string", enum: [...WEB_TOPICS] } }, summary: { type: "string" }, driver: { type: "string" }, note: { type: "string" }, why: { type: "string" },
+      category: { type: "string", enum: [...WEB_CATEGORIES] }, impact: { type: "string", enum: [...WEB_IMPACTS] }, watch: { type: "string" }, tr } };
     const response = await this.client.responses.create({
       model: this.model, store: false, reasoning: { effort: "low" },
       text: { format: { type: "json_schema", name: "web_rewrite", strict: true, schema } } as never,
       input: [{ role: "developer", content: WEB_REWRITE_GUIDE }, { role: "user", content: JSON.stringify({ kind, post: text.slice(0, 3000) }) }]
     });
-    const out = JSON.parse((response as { output_text: string }).output_text) as { headline: string; note: string; category: string; impact: string; watch: string };
+    const out = JSON.parse((response as { output_text: string }).output_text) as { headline: string; summary: string; driver: string; topics: string[]; note: string; why: string; category: string; impact: string; watch: string; tr: Record<string, WebTranslation> };
     return { headline: String(out.headline ?? "").trim().slice(0, 160), note: String(out.note ?? "").trim().slice(0, kind === "desk" ? 1600 : 400),
-      category: String(out.category ?? "markets"), impact: String(out.impact ?? "neutral"), watch: String(out.watch ?? "").trim().slice(0, 120) };
+      category: String(out.category ?? "markets"), impact: String(out.impact ?? "neutral"), watch: String(out.watch ?? "").trim().slice(0, 120),
+      why: String(out.why ?? "").trim().slice(0, 200), summary: String(out.summary ?? "").trim().slice(0, kind === "desk" ? 600 : 300), driver: String(out.driver ?? "").trim().slice(0, 60), topics: (Array.isArray(out.topics) ? out.topics : []).filter((t) => (WEB_TOPICS as readonly string[]).includes(t)).slice(0, 3), tr: out.tr && typeof out.tr === "object" ? out.tr : {} };
   }
   /** A separate judgment that never receives the primary classifier's answer. */
   async shadowAssess(article: NewsArticle, event: EventAssessment, prior?: StoryState): Promise<{ material: boolean; score: number; reason: string }> {

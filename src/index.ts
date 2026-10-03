@@ -20,7 +20,7 @@ import { officialRemark, remarksBlock, remarksDigest } from "./official-remarks.
 import { formatRecap, recapDue } from "./recap.js";
 import { aiUsage } from "./ai-usage.js";
 import { deskHeadlines, deskOutput, deskPrompt, dueDeskSlot } from "./desk-update.js";
-import { weekendClosed } from "./weekend.js";
+import { aiBlocked, weekendClosed, weekendRedOnly } from "./weekend.js";
 import { plainPost, webMarker, webSafe } from "./web-feed.js";
 import { formatChannelPost, formatMembers, formatRequest, Members, type AccessRequest } from "./members.js";
 import { botUsername, createSingleUseInvite, removeFromChat } from "./telegram.js";
@@ -233,11 +233,11 @@ async function publishWeb(message: string, id: string, kind: "alert" | "desk"): 
   try {
     const plain = plainPost(message);
     const en = await gateEditor.webRewrite(plain, kind);
-    if (!en.headline || !webSafe(`${en.headline} ${en.note} ${en.watch}`)) { log.info({ id, kind }, "Web feed item skipped by safety check"); return; }
+    if (!en.headline || !webSafe(`${en.headline} ${en.summary} ${en.note} ${en.watch} ${en.why} ${en.driver}`)) { log.info({ id, kind }, "Web feed item skipped by safety check"); return; }
     if (config.TELEGRAM_CHAT_ID_EN) await sendTelegramMessage(config.TELEGRAM_BOT_TOKEN, { chatId: config.TELEGRAM_CHAT_ID_EN }, formatChannelPost(kind, kind === "desk" ? "yellow" : webMarker(message), en))
       .catch((error) => log.warn({ err: error, id }, "Real-time channel post failed"));
     const res = await fetch(`${config.WEB_FEED_URL}/api/ingest`, { method: "POST", headers: { "content-type": "application/json", "x-ingest-secret": config.WEB_FEED_SECRET },
-      body: JSON.stringify({ id, at: new Date().toISOString(), kind, marker: kind === "desk" ? "yellow" : webMarker(message), headline: en.headline, note: en.note, category: en.category, impact: en.impact, watch: en.watch }), signal: AbortSignal.timeout(15_000) });
+      body: JSON.stringify({ id, at: new Date().toISOString(), kind, marker: kind === "desk" ? "yellow" : webMarker(message), headline: en.headline, summary: en.summary, driver: en.driver, topics: en.topics, note: en.note, category: en.category, impact: en.impact, watch: en.watch, why: en.why, tr: en.tr }), signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`ingest ${res.status}`);
     log.info({ id, kind }, "Web feed item published");
   } catch (error) { log.warn({ err: error, id, kind }, "Web feed publish failed"); }
@@ -273,6 +273,13 @@ async function deliver(message: string, id: string, article: import("./types.js"
   const outputCheck = validateNewsOutput(message, article);
   if (!outputCheck.ok) throw new Error(`NEWS output gate rejected ${id}: ${outputCheck.reason}`);
   if (store.safeMode) return {};
+  if (weekendClosed()) {
+    // Weekend: groups stay closed. Red news goes to the website and members' channel only; marked delivered so Monday never replays it.
+    if (webMarker(message) !== "red") { log.info({ id }, "Weekend close: non-red news not posted"); return { weekend: 0 }; }
+    void publishWeb(message, id, "alert");
+    log.info({ id }, "Weekend close: red news published to website and members' channel");
+    return { weekend: 0 };
+  }
   const withinHour = recentSendTimes.filter((time) => Date.now() - time < 3600000);
   recentSendTimes.length = 0; recentSendTimes.push(...withinHour);
   if (recentSendTimes.length >= 30) {
@@ -645,9 +652,14 @@ async function tick(): Promise<void> {
     lastPipelineProgressAt = Date.now();
     // Weekend close: no polling, no posts, no AI from Saturday 00:00 to Monday 04:00 WIB; admin commands still answer.
     const closed = weekendClosed();
-    if (closed !== weekendWasClosed) { weekendWasClosed = closed; log.info({ closed }, closed ? "Weekend close: news and AI off until Monday 04:00 WIB" : "Weekend close ended: news back on"); }
-    if (closed) { await pollAdmin(); await requestTick(); return; }
-    await pollAdmin(); await requestTick(); await adminReport(); await coverageTick();
+    if (closed !== weekendWasClosed) { weekendWasClosed = closed; log.info({ closed }, closed ? (weekendRedOnly() && config.WEB_FEED_URL ? "Weekend close: groups off; red news to website and members only" : "Weekend close: news and AI off until Monday 04:00 WIB") : "Weekend close ended: news back on"); }
+    // Weekend red-only (default): the news pipeline keeps running for red news to the website and members' channel; nothing else.
+    const redOnly = weekendRedOnly() && Boolean(config.WEB_FEED_URL && config.WEB_FEED_SECRET); // no website configured: nothing to publish, keep the full close
+    if (closed && !redOnly) { await pollAdmin(); await requestTick(); return; }
+    await pollAdmin(); await requestTick();
+    if (closed && aiBlocked()) return; // weekend AI budget spent: stop polling until the next WIB day
+    if (!closed) {
+    await adminReport(); await coverageTick();
     try { await scorePredictions(); await publicScorecard(); } catch (error) { log.warn({ err: error }, "Prediction scoring failed"); }
     // Phase 4: independent, deterministic and shadow-only.  It has no route to deliver().
     if (Date.now() - lastMarketObservationAt >= config.MARKET_OBSERVER_INTERVAL_SECONDS * 1000) {
@@ -657,6 +669,7 @@ async function tick(): Promise<void> {
     }
     // Never replay old outage-era headlines individually after credits recover.
     try { await recapTick(); } catch (error) { log.warn({ err: error }, "News recap failed"); }
+    }
     const since = new Date(Date.now() - config.MAX_ARTICLE_AGE_MINUTES * 60000);
     for (const provider of providers) {
       const now = Date.now();
